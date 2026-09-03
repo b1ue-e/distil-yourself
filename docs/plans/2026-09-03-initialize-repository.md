@@ -38,7 +38,7 @@ Run: `cmp docs/specs/knowledge-distiller-design.md ../docs/superpowers/specs/202
 
 Expected: exit 0, proving that the remote-ready specification is byte-identical to the approved source.
 
-- [ ] **Step 4: Create the initial commit**
+- [x] **Step 4: Create the initial commit**
 
 Run: `git add README.md docs/specs/knowledge-distiller-design.md docs/plans/2026-09-03-initialize-repository.md`
 
@@ -46,7 +46,7 @@ Run: `git commit -m "docs: initialize distil yourself design"`
 
 Expected: one root commit containing only the three documentation files.
 
-- [ ] **Step 5: Publish and verify `main`**
+- [x] **Step 5: Publish and verify `main`**
 
 Run: `git push -u origin main`
 
