@@ -9,6 +9,15 @@ import sys
 from typing import Any, Dict, Optional, Sequence
 
 from knowledge_distiller.artifacts import DraftValidationError, validate_draft
+from knowledge_distiller.persistence import (
+    TaskBusyError,
+    TaskPersistenceError,
+    TaskSnapshot,
+    create_task,
+    inspect_task,
+    recover_task,
+    transition_task,
+)
 from knowledge_distiller.state import (
     Event,
     InvalidTransition,
@@ -16,6 +25,7 @@ from knowledge_distiller.state import (
     Phase,
     TaskState,
     TransitionFacts,
+    state_to_dict,
     transition,
 )
 
@@ -98,11 +108,17 @@ def _parse_facts(raw: str) -> TransitionFacts:
 
 
 def _state_payload(state: TaskState) -> Dict[str, Any]:
+    return state_to_dict(state)
+
+
+def _snapshot_payload(snapshot: TaskSnapshot) -> Dict[str, Any]:
     return {
-        "mode": state.mode.value if state.mode is not None else None,
-        "phase": state.phase.value,
-        "epoch": state.epoch,
-        "prior_phase": state.prior_phase.value if state.prior_phase is not None else None,
+        "state": _state_payload(snapshot.state),
+        "generation_id": snapshot.generation_id,
+        "manifest_digest": snapshot.manifest_digest,
+        "fencing_epoch": snapshot.fencing_epoch,
+        "pointer_stale": snapshot.pointer_stale,
+        "recovery_required": snapshot.recovery_required,
     }
 
 
@@ -117,6 +133,18 @@ def _build_parser() -> JsonArgumentParser:
     state_transition.add_argument("--state", required=True)
     state_transition.add_argument("--event", required=True)
     state_transition.add_argument("--facts", required=True)
+
+    task_init = commands.add_parser("task-init")
+    task_init.add_argument("path")
+
+    task_transition = commands.add_parser("task-transition")
+    task_transition.add_argument("path")
+    task_transition.add_argument("--event", required=True)
+    task_transition.add_argument("--facts", required=True)
+
+    task_inspect = commands.add_parser("task-inspect")
+    task_inspect.add_argument("path")
+    task_inspect.add_argument("--recover", action="store_true")
     return parser
 
 
@@ -126,12 +154,27 @@ def _run(arguments: Sequence[str]) -> Dict[str, Any]:
         manifest = validate_draft(Path(options.path))
         return {"ok": True, "manifest": [asdict(record) for record in manifest]}
 
-    state = _parse_state(options.state)
+    if options.command == "task-init":
+        return {"ok": True, "task": _snapshot_payload(create_task(Path(options.path)))}
+
+    if options.command == "task-inspect":
+        operation = recover_task if options.recover else inspect_task
+        return {"ok": True, "task": _snapshot_payload(operation(Path(options.path)))}
+
     facts = _parse_facts(options.facts)
     try:
         event = Event(options.event)
     except ValueError:
         raise CliInputError("invalid-event")
+    if options.command == "task-transition":
+        return {
+            "ok": True,
+            "task": _snapshot_payload(
+                transition_task(Path(options.path), event, facts)
+            ),
+        }
+
+    state = _parse_state(options.state)
     result = transition(state, event, facts)
     return {"ok": True, "state": _state_payload(result)}
 
@@ -150,6 +193,21 @@ def main(arguments: Optional[Sequence[str]] = None) -> int:
         if error.path is not None:
             detail["path"] = error.path
         _emit({"ok": False, "error": detail}, sys.stderr)
+        return 3
+    except TaskBusyError as error:
+        _emit(
+            {"ok": False, "error": {"code": "task-busy", "reason": error.code}},
+            sys.stderr,
+        )
+        return 3
+    except TaskPersistenceError as error:
+        _emit(
+            {
+                "ok": False,
+                "error": {"code": "task-persistence-error", "reason": error.code},
+            },
+            sys.stderr,
+        )
         return 3
     except InvalidTransition as error:
         _emit(

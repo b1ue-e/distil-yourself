@@ -18,7 +18,15 @@ Resume is an operation on a suspended state, not a fourth mode. It revalidates i
 
 The engine also represents `revision-review`, `suspended`, `suspended-exhausted`, `auth-stale`, `done`, `done-approved`, `done-partial`, `cancelled`, and `failed-permanent`.
 
-The foundation implements transition validation but not persistence or external side effects. A successful transition means only that the requested phase change is legal under supplied facts.
+The foundation implements transition validation and local durable task-state persistence, but no source or export side effects. A successful transition means only that the requested phase change is legal under supplied typed facts and was checkpointed locally.
+
+## Durable checkpoints
+
+Choose one explicit task workspace; do not infer a global location. Initialize it once with `task-init`, inspect it with `task-inspect`, and advance it only with `task-transition`. The workspace contains an owner-only framed event log and immutable state generations. `current-generation` is a derived pointer, not the authority.
+
+Read-only inspection never changes the fencing epoch. `task-inspect --recover` acquires the single-writer lock, truncates only an incomplete final frame, quarantines an uncommitted prepared generation, advances the fencing epoch, and repairs a missing or stale pointer from the latest verified COMMIT. Checksum, hash-chain, sequence, manifest, state, lineage, permission, link, and uncommitted-pointer failures are corruption; stop instead of reconstructing or guessing.
+
+Transition facts are the fixed booleans and enum defined by the state engine. Do not place source text, excerpts, locators, participant data, secrets, or free-form notes into facts or control-file paths. Checkpoint completion does not create a grant, authority attestation, approval, or mutation consent.
 
 ## Interaction rules
 

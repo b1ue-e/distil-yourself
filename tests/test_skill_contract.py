@@ -48,6 +48,18 @@ class SkillContractTest(unittest.TestCase):
         for forbidden in ("automatically install", "scan all accessible", "follow every link"):
             self.assertNotIn(forbidden, text)
 
+    def test_body_routes_state_changes_through_durable_checkpoint_commands(self) -> None:
+        text = self.skill_text().lower()
+        for command in ("task-init", "task-transition", "task-inspect"):
+            self.assertIn(command, text)
+        self.assertNotIn("persistent checkpoints, sealed evaluation", text)
+
+    def test_checkpoint_guidance_does_not_expand_authority(self) -> None:
+        text = self.skill_text().lower()
+        self.assertIn("does not grant source access", text)
+        self.assertIn("does not authorize external mutation", text)
+        self.assertIn("do not place source content", text)
+
     def test_eval_set_covers_two_triggers_and_one_near_miss(self) -> None:
         self.assertTrue(EVAL_FILE.is_file(), "evals/evals.json must exist")
         payload = json.loads(EVAL_FILE.read_text(encoding="utf-8"))

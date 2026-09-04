@@ -2,7 +2,7 @@
 
 Distil Yourself is a privacy-conscious, resumable Skill Factory for turning a person's documents, agent sessions, and explicit judgments into small, behaviorally testable agent skills.
 
-The approved design now has a runnable Foundation milestone: a guarded workflow state model, a closed-policy domain-draft validator, a small JSON CLI, and contract/evaluation fixtures for the meta-skill.
+The approved design now has a runnable local foundation: a guarded workflow state model, crash-consistent state checkpoints, a closed-policy domain-draft validator, a JSON CLI, and contract/evaluation fixtures for the meta-skill.
 
 ## Design
 
@@ -50,13 +50,28 @@ python3 knowledge-distiller/scripts/kd.py transition \
 
 Successful commands emit structured JSON on stdout. Invalid input exits with code `2`; a rejected artifact or transition exits with code `3` and emits structured JSON on stderr.
 
+Create, advance, inspect, or recover a durable local task:
+
+```bash
+python3 knowledge-distiller/scripts/kd.py task-init /absolute/path/to/task-workspace
+python3 knowledge-distiller/scripts/kd.py task-transition /absolute/path/to/task-workspace \
+  --event start-discover \
+  --facts '{"has_seed":true}'
+python3 knowledge-distiller/scripts/kd.py task-inspect /absolute/path/to/task-workspace
+python3 knowledge-distiller/scripts/kd.py task-inspect /absolute/path/to/task-workspace --recover
+```
+
+Task directories and regular files use `0700` and `0600` modes. The framed journal verifies CRC32C, sequence, fencing epoch, payload digest, and a SHA-256 record chain. State updates use PREPARE → immutable generation → COMMIT → atomic pointer replacement. Inspection is read-only; `--recover` takes the writer lock and repairs only the cases authorized by the design.
+
+Checkpoint facts are a closed set of booleans and one phase enum. Never place source text, secrets, locators, or free-form notes in them. Persisting a state transition grants no source access and authorizes no external mutation.
+
 ## Foundation limits
 
-This milestone does not implement network or local-session source adapters, the trusted request broker, parser sandbox, persistent event log/checkpoints, sealed evaluator, signed approval subjects, export/purge brokers, installation, or publication. Passing local validation authorizes none of those operations.
+This milestone does not implement network or local-session source adapters, the trusted request broker, parser sandbox, renewable/distributed leases, sealed evaluator, signed approval subjects, export/purge brokers, installation, or publication. Passing local validation or writing a checkpoint authorizes none of those operations.
 
 ## Repository status
 
 - Design: approved
-- Implementation: deterministic Foundation milestone
+- Implementation: deterministic Foundation plus durable local checkpoints
 - CI and release process: not defined
 - License: not yet selected

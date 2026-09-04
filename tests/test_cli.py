@@ -9,6 +9,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CLI = ROOT / "knowledge-distiller" / "scripts" / "kd.py"
+sys.path.insert(0, str(ROOT / "knowledge-distiller" / "scripts"))
+
+from knowledge_distiller.persistence import TaskCoordinator, create_task  # noqa: E402
 
 
 class CliTest(unittest.TestCase):
@@ -178,6 +181,82 @@ class CliTest(unittest.TestCase):
         payload = json.loads(result.stderr)
         self.assertEqual(payload["error"]["code"], "invalid-transition")
         self.assertNotIn("Traceback", result.stderr)
+
+    def test_task_init_transition_and_inspect_use_durable_state(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            task = Path(directory) / "task"
+            initialized = self.run_cli("task-init", str(task))
+            advanced = self.run_cli(
+                "task-transition",
+                str(task),
+                "--event",
+                "start-discover",
+                "--facts",
+                '{"has_seed":true}',
+            )
+            inspected = self.run_cli("task-inspect", str(task))
+
+        self.assertEqual(initialized.returncode, 0, initialized.stderr)
+        self.assertEqual(advanced.returncode, 0, advanced.stderr)
+        self.assertEqual(inspected.returncode, 0, inspected.stderr)
+        initial_payload = json.loads(initialized.stdout)["task"]
+        advanced_payload = json.loads(advanced.stdout)["task"]
+        inspected_payload = json.loads(inspected.stdout)["task"]
+        self.assertEqual(initial_payload["state"]["phase"], "init")
+        self.assertEqual(advanced_payload["state"]["phase"], "scout")
+        self.assertEqual(advanced_payload, inspected_payload)
+        self.assertGreater(
+            advanced_payload["fencing_epoch"], initial_payload["fencing_epoch"]
+        )
+
+    def test_task_init_rejects_nonempty_destination_without_leaking_path_content(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            secret = "PRIVATE-SOURCE-CONTENT"
+            task = Path(directory) / ("task-" + secret)
+            task.mkdir()
+            (task / "keep").write_text("unchanged", encoding="utf-8")
+
+            result = self.run_cli("task-init", str(task))
+
+        self.assertEqual(result.returncode, 3)
+        payload = json.loads(result.stderr)
+        self.assertEqual(payload["error"]["code"], "task-persistence-error")
+        self.assertEqual(payload["error"]["reason"], "workspace-not-empty")
+        self.assertNotIn(secret, result.stderr)
+
+    def test_task_transition_rejects_unknown_fact_without_echoing_it(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            task = Path(directory) / "task"
+            create_task(task)
+            secret = "PRIVATE-SOURCE-CONTENT"
+
+            result = self.run_cli(
+                "task-transition",
+                str(task),
+                "--event",
+                "start-discover",
+                "--facts",
+                json.dumps({"unknown_" + secret: True}),
+            )
+
+        self.assertEqual(result.returncode, 2)
+        payload = json.loads(result.stderr)
+        self.assertEqual(payload["error"]["code"], "invalid-input")
+        self.assertEqual(payload["error"]["reason"], "unknown-fact-field")
+        self.assertNotIn(secret, result.stderr)
+
+    def test_busy_task_has_stable_redacted_error(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            task = Path(directory) / "task"
+            create_task(task)
+
+            with TaskCoordinator(task):
+                result = self.run_cli("task-inspect", str(task), "--recover")
+
+        self.assertEqual(result.returncode, 3)
+        payload = json.loads(result.stderr)
+        self.assertEqual(payload["error"]["code"], "task-busy")
+        self.assertEqual(payload["error"]["reason"], "task-busy")
 
 
 if __name__ == "__main__":

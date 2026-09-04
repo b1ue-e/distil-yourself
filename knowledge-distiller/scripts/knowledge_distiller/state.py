@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass, fields, replace
 from enum import Enum
-from typing import Optional
+from typing import Any, Dict, Optional
 
 
 class Mode(str, Enum):
@@ -175,6 +175,60 @@ class TransitionFacts:
 
 class InvalidTransition(ValueError):
     """Raised when an event is illegal or its explicit guard is false."""
+
+
+def state_to_dict(state: TaskState) -> Dict[str, Any]:
+    """Return the canonical JSON-compatible representation of a task state."""
+
+    return {
+        "mode": state.mode.value if state.mode is not None else None,
+        "phase": state.phase.value,
+        "epoch": state.epoch,
+        "prior_phase": (
+            state.prior_phase.value if state.prior_phase is not None else None
+        ),
+    }
+
+
+def state_from_dict(payload: Dict[str, Any]) -> TaskState:
+    """Parse a strict JSON-compatible task state representation."""
+
+    if not isinstance(payload, dict) or set(payload) != {
+        "mode",
+        "phase",
+        "epoch",
+        "prior_phase",
+    }:
+        raise ValueError("invalid state fields")
+    mode_value = payload["mode"]
+    phase_value = payload["phase"]
+    prior_value = payload["prior_phase"]
+    epoch = payload["epoch"]
+    if mode_value is not None and not isinstance(mode_value, str):
+        raise ValueError("invalid mode")
+    if not isinstance(phase_value, str):
+        raise ValueError("invalid phase")
+    if prior_value is not None and not isinstance(prior_value, str):
+        raise ValueError("invalid prior phase")
+    if type(epoch) is not int:
+        raise ValueError("invalid epoch")
+    return TaskState(
+        mode=Mode(mode_value) if mode_value is not None else None,
+        phase=Phase(phase_value),
+        epoch=epoch,
+        prior_phase=Phase(prior_value) if prior_value is not None else None,
+    )
+
+
+def facts_to_dict(facts: TransitionFacts) -> Dict[str, Any]:
+    """Return all typed transition facts without caller-defined content fields."""
+
+    return {
+        field.name: (
+            value.value if isinstance(value := getattr(facts, field.name), Phase) else value
+        )
+        for field in fields(facts)
+    }
 
 
 def _require(facts: TransitionFacts, *names: str) -> None:
