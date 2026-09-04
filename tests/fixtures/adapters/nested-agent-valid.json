@@ -1,0 +1,63 @@
+{
+  "schema_version": "knowledge-distiller.event-graph/v1",
+  "adapter": {"name": "synthetic", "adapter_version": "1.0.0", "product_version": "synthetic-1", "native_schema_version": "synthetic-1"},
+  "source_snapshot_id": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "owner": {"kind": "user", "id": "owner-1", "verification": "verified-principal"},
+  "events": [
+    {
+      "id": "parent-event", "native_event_id": "native-parent", "native_offset": "parent-0",
+      "source_snapshot_id": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "root_session_id": "session-1", "session_id": "session-1", "thread_id": "thread-1",
+      "root_stream_id": "parent-stream", "stream_id": "parent-stream", "branch_id": "branch-1",
+      "parent_event_id": null, "span_id": null, "event_type": "message",
+      "actor": {"kind": "assistant", "id": "assistant-1", "resolution": "native"},
+      "project_workspace": {"kind": "workspace", "id": "workspace-1"}, "native_timestamp": null,
+      "stream_position": 0, "correlation_id": null, "chunk_index": null,
+      "content_segments": [{"type": "text", "text": "Synthetic parent event.", "media_type": null, "artifact_locator_id": null}],
+      "artifact_locators": [], "observable_outcome": null, "semantic_markers": [], "claim_eligible": false
+    },
+    {
+      "id": "child-start", "native_event_id": "native-child-start", "native_offset": "child-0",
+      "source_snapshot_id": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "root_session_id": "session-1", "session_id": "child-session", "thread_id": "child-thread",
+      "root_stream_id": "child-stream", "stream_id": "child-stream", "branch_id": "child-branch",
+      "parent_event_id": "parent-event", "span_id": "child-span", "event_type": "agent-start",
+      "actor": {"kind": "agent", "id": "child-agent", "resolution": "deterministic"},
+      "project_workspace": {"kind": "workspace", "id": "workspace-1"}, "native_timestamp": null,
+      "stream_position": 0, "correlation_id": "child-run", "chunk_index": null,
+      "content_segments": [], "artifact_locators": [], "observable_outcome": null,
+      "semantic_markers": ["spawn"], "claim_eligible": false
+    },
+    {
+      "id": "child-completion", "native_event_id": "native-child-completion", "native_offset": "child-1",
+      "source_snapshot_id": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "root_session_id": "session-1", "session_id": "child-session", "thread_id": "child-thread",
+      "root_stream_id": "child-stream", "stream_id": "child-stream", "branch_id": "child-branch",
+      "parent_event_id": "child-start", "span_id": "child-span", "event_type": "agent-completion",
+      "actor": {"kind": "agent", "id": "child-agent", "resolution": "deterministic"},
+      "project_workspace": {"kind": "workspace", "id": "workspace-1"}, "native_timestamp": null,
+      "stream_position": 1, "correlation_id": "child-run", "chunk_index": null,
+      "content_segments": [], "artifact_locators": [],
+      "observable_outcome": {"kind": "agent", "status": "succeeded", "summary": "Synthetic completion."},
+      "semantic_markers": ["completion"], "claim_eligible": false
+    },
+    {
+      "id": "parent-joined", "native_event_id": "native-parent-joined", "native_offset": "parent-1",
+      "source_snapshot_id": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "root_session_id": "session-1", "session_id": "session-1", "thread_id": "thread-1",
+      "root_stream_id": "parent-stream", "stream_id": "parent-stream", "branch_id": "branch-1",
+      "parent_event_id": "parent-event", "span_id": null, "event_type": "joined",
+      "actor": {"kind": "assistant", "id": "assistant-1", "resolution": "native"},
+      "project_workspace": {"kind": "workspace", "id": "workspace-1"}, "native_timestamp": null,
+      "stream_position": 1, "correlation_id": "child-run", "chunk_index": null,
+      "content_segments": [], "artifact_locators": [], "observable_outcome": null,
+      "semantic_markers": [], "claim_eligible": false
+    }
+  ],
+  "edges": [
+    {"id": "edge-spawn", "edge_type": "spawned-by", "from": {"status": "local", "event_id": "parent-event", "source_snapshot_id": null, "reason": null}, "to": {"status": "local", "event_id": "child-start", "source_snapshot_id": null, "reason": null}},
+    {"id": "edge-child-run", "edge_type": "precedes", "from": {"status": "local", "event_id": "child-start", "source_snapshot_id": null, "reason": null}, "to": {"status": "local", "event_id": "child-completion", "source_snapshot_id": null, "reason": null}},
+    {"id": "edge-join", "edge_type": "joined", "from": {"status": "local", "event_id": "child-completion", "source_snapshot_id": null, "reason": null}, "to": {"status": "local", "event_id": "parent-joined", "source_snapshot_id": null, "reason": null}}
+  ],
+  "fidelity_losses": []
+}

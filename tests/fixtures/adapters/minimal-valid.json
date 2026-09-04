@@ -1,0 +1,59 @@
+{
+  "schema_version": "knowledge-distiller.event-graph/v1",
+  "adapter": {
+    "name": "synthetic",
+    "adapter_version": "1.0.0",
+    "product_version": "synthetic-1",
+    "native_schema_version": "synthetic-1"
+  },
+  "source_snapshot_id": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "owner": {
+    "kind": "user",
+    "id": "owner-1",
+    "verification": "verified-principal"
+  },
+  "events": [
+    {
+      "id": "event-1",
+      "native_event_id": "native-event-1",
+      "native_offset": "offset-1",
+      "source_snapshot_id": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "root_session_id": "session-1",
+      "session_id": "session-1",
+      "thread_id": "thread-1",
+      "root_stream_id": "stream-1",
+      "stream_id": "stream-1",
+      "branch_id": "branch-1",
+      "parent_event_id": null,
+      "span_id": null,
+      "event_type": "message",
+      "actor": {
+        "kind": "user",
+        "id": "owner-1",
+        "resolution": "verified-owner"
+      },
+      "project_workspace": {
+        "kind": "project",
+        "id": "project-1"
+      },
+      "native_timestamp": null,
+      "stream_position": 0,
+      "correlation_id": null,
+      "chunk_index": null,
+      "content_segments": [
+        {
+          "type": "text",
+          "text": "Synthetic owner message.",
+          "media_type": null,
+          "artifact_locator_id": null
+        }
+      ],
+      "artifact_locators": [],
+      "observable_outcome": null,
+      "semantic_markers": [],
+      "claim_eligible": true
+    }
+  ],
+  "edges": [],
+  "fidelity_losses": []
+}

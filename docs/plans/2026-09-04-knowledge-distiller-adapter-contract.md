@@ -52,41 +52,41 @@ Expected: PASS.
 - Create: `tests/fixtures/adapters/tool-flow-valid.json`
 - Create: `tests/fixtures/adapters/nested-agent-valid.json`
 
-- [ ] **Step 1: Write the smallest valid-graph test**
+- [x] **Step 1: Write the smallest valid-graph test**
 
 Load `minimal-valid.json`, validate it, and assert a manifest containing schema version, adapter identity, snapshot ID, event count, edge count, and canonical SHA-256 digest.
 
-- [ ] **Step 2: Run the test red**
+- [x] **Step 2: Run the test red**
 
 Run: `python3 -m unittest tests.test_adapters.CanonicalGraphTest.test_minimal_graph_has_stable_manifest -v`
 
 Expected: FAIL because `knowledge_distiller.adapters` does not exist.
 
-- [ ] **Step 3: Implement strict parsing and manifest generation**
+- [x] **Step 3: Implement strict parsing and manifest generation**
 
 Accept only the documented top-level, event, actor, content-segment, edge, reference, and fidelity-loss fields. Reject unknown fields, invalid runtime scalar types, empty or oversized identifiers, unsupported canonical/native versions, duplicate event/native IDs, duplicate stream positions, events over 1 MiB, and mismatched snapshot IDs. Return only counts, identifiers, and a canonical digest; never echo source text in an error.
 
-- [ ] **Step 4: Run the smallest test green**
+- [x] **Step 4: Run the smallest test green**
 
 Run: `python3 -m unittest tests.test_adapters.CanonicalGraphTest.test_minimal_graph_has_stable_manifest -v`
 
 Expected: PASS.
 
-- [ ] **Step 5: Add failing graph-invariant tests**
+- [x] **Step 5: Add failing graph-invariant tests**
 
 Cover missing/external reference markers, graph cycles, unreachable tool outputs, duplicate or missing terminal tool results, non-contiguous output chunks, compaction content, explicit edit/retry/fork/supersession edges, child spawn and completion/join ordering, ambiguous owner attribution, prohibited fidelity loss, and unknown edge/event types.
 
-- [ ] **Step 6: Run the invariant tests red**
+- [x] **Step 6: Run the invariant tests red**
 
 Run: `python3 -m unittest tests.test_adapters -v`
 
 Expected: FAIL on the first unimplemented graph invariant.
 
-- [ ] **Step 7: Implement graph invariants minimally**
+- [x] **Step 7: Implement graph invariants minimally**
 
 Build reachability over event-to-event edges. Enforce acyclicity; tool call/chunk/result cardinality and reachability; explicit marker edges; compaction honesty; exactly one preceding spawn for child roots; child termination before parent observation; and owner-claim eligibility only for deterministically resolved owner events. Permit only the fidelity losses listed in the design.
 
-- [ ] **Step 8: Run all adapter tests green**
+- [x] **Step 8: Run all adapter tests green**
 
 Run: `python3 -m unittest tests.test_adapters -v`
 

@@ -17,6 +17,13 @@ and cannot be `latest`. Free-text bounds are stated below and count UTF-8 bytes.
 Each serialized event is at most 1048576 bytes, including its nested values. The
 complete canonical graph is at most 67108864 bytes.
 
+Raw JSON must pass through `decode_event_graph_json` before
+`validate_event_graph`. The strict decoder rejects duplicate keys at every
+nesting level before a dictionary can erase that evidence, as well as invalid
+UTF-8, floats, non-finite numbers, oversized integers, malformed JSON, and
+excessive nesting. An already-materialized dictionary has no duplicate-key
+provenance and the validator does not claim otherwise.
+
 ### Top-level object
 
 | Top-level field | Required | Type | Nullable | Constraints |
@@ -60,7 +67,10 @@ allowlist is empty. Any other adapter/version tuple is rejected.
 | `verification` | yes | string | no | exactly `verified-principal` |
 
 The owner is established outside source content. Text, path names, and account
-availability never establish or change it.
+availability never establish or change it. Validation requires an immutable
+`ValidationContext` containing the externally established expected owner ID and
+source snapshot ID. Matching owner, actor, and snapshot fields inside the graph
+cannot replace these trust anchors.
 
 ## Event schema
 
@@ -95,7 +105,9 @@ A non-null `native_event_id` is unique across the entire snapshot. The native
 stream key is `stream_id` when non-null and otherwise `root_stream_id`;
 `stream_position` is unique and strictly increasing within that key.
 `stream_position` defines order within each native stream. The `events` array
-order has no chronological meaning.
+order has no chronological meaning. `parent_event_id` is the native immediate or
+logical event reference, not a lifecycle matching key. On a child terminal,
+`parent_event_id` need not equal the child start ID.
 
 `event_type` is exactly one of `message`, `tool-call`, `tool-output-chunk`,
 `tool-result`, `compacted-summary`, `agent-start`, `agent-completion`,
@@ -177,6 +189,13 @@ dependent. Edge names do not reverse this direction: in particular,
 `tool-output-of` and `spawned-by` still point predecessor -> dependent. `*` below
 means any allowed `event_type`.
 
+Every local edge whose endpoints have the same native stream key requires the
+source `stream_position` to be strictly less than the target
+`stream_position`. Validation also adds an implicit ordering edge between each
+consecutive pair of events in a native stream. These edges participate in cycle
+and reachability validation only; they do not change the manifest edge count or
+canonical digest.
+
 | Edge type | Direction | Allowed from event_type | Allowed to event_type | Cardinality |
 | --- | --- | --- | --- | --- |
 | `precedes` | predecessor -> dependent | `*` | `*` | 0..N incoming and outgoing |
@@ -257,9 +276,14 @@ mismatch rejects the graph.
   preceding parent event and a resolved child actor.
 - Cross-agent communication uses ordered sent, delivered, and, only when
   observable, consumed events and matching edges; it is not collapsed text.
-- Every child completion, cancellation, or failure precedes the matching parent
-  joined, returned, or cancellation-observed event. Orphans and omitted
-  decision-relevant relations quarantine the root case.
+- Every child start has exactly one matching terminal: completion, cancellation,
+  or failure. The exact lifecycle identity is
+  `(root_stream_id, actor.id, correlation_id)`; the actor ID and correlation ID
+  are non-null, and both actors are resolved. Every terminal matches exactly one
+  child start, is reachable from it in the augmented causal graph, and precedes
+  the matching parent joined, returned, or cancellation-observed event. V1 has
+  no incomplete-snapshot state; orphans and omitted decision-relevant relations
+  quarantine the root case.
 
 ## Failure contract
 

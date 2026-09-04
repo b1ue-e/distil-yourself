@@ -248,6 +248,12 @@ class SkillContractTest(unittest.TestCase):
             "`sha256:` followed by the 64 lowercase hexadecimal digits",
             "A non-null `native_event_id` is unique across the entire snapshot.",
             "`claim_eligible` is true if and only if `actor.kind` is `user`, `actor.resolution` is `verified-owner`, and `actor.id == owner.id`.",
+            "Raw JSON must pass through `decode_event_graph_json` before `validate_event_graph`",
+            "an immutable `ValidationContext`",
+            "Every local edge whose endpoints have the same native stream key",
+            "Every child start has exactly one matching terminal",
+            "`(root_stream_id, actor.id, correlation_id)`",
+            "`parent_event_id` need not equal the child start ID",
         ):
             self.assertIn(requirement, normalized)
 
