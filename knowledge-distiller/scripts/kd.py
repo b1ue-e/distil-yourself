@@ -4,10 +4,19 @@
 import argparse
 from dataclasses import asdict, fields
 import json
+import os
 from pathlib import Path
+import stat
 import sys
 from typing import Any, Dict, Optional, Sequence
 
+from knowledge_distiller.adapters import (
+    MAX_GRAPH_BYTES,
+    GraphValidationError,
+    ValidationContext,
+    decode_event_graph_json,
+    validate_event_graph,
+)
 from knowledge_distiller.artifacts import DraftValidationError, validate_draft
 from knowledge_distiller.persistence import (
     TaskBusyError,
@@ -122,12 +131,77 @@ def _snapshot_payload(snapshot: TaskSnapshot) -> Dict[str, Any]:
     }
 
 
+def _read_event_graph(path: str) -> bytes:
+    if not hasattr(os, "O_NOFOLLOW"):
+        raise CliInputError("unsafe-source-file")
+    flags = os.O_RDONLY | os.O_NOFOLLOW
+    flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NONBLOCK", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except FileNotFoundError:
+        raise CliInputError("source-file-unavailable")
+    except (OSError, TypeError, ValueError):
+        raise CliInputError("unsafe-source-file")
+
+    try:
+        try:
+            metadata = os.fstat(descriptor)
+        except OSError:
+            raise CliInputError("unsafe-source-file")
+        if not stat.S_ISREG(metadata.st_mode):
+            raise CliInputError("unsafe-source-file")
+        if metadata.st_size > MAX_GRAPH_BYTES:
+            raise CliInputError("source-file-too-large")
+
+        content = bytearray()
+        while len(content) <= MAX_GRAPH_BYTES:
+            try:
+                chunk = os.read(
+                    descriptor,
+                    min(1024 * 1024, MAX_GRAPH_BYTES + 1 - len(content)),
+                )
+            except OSError:
+                raise CliInputError("source-file-unavailable")
+            if not chunk:
+                break
+            content.extend(chunk)
+        if len(content) > MAX_GRAPH_BYTES:
+            raise CliInputError("source-file-too-large")
+        return bytes(content)
+    finally:
+        os.close(descriptor)
+
+
+def _validate_event_graph(
+    path: str,
+    expected_owner_id: str,
+    expected_source_snapshot_id: str,
+) -> Dict[str, Any]:
+    raw = _read_event_graph(path)
+    try:
+        graph = decode_event_graph_json(raw)
+    except GraphValidationError as error:
+        if error.code in {"invalid-utf8", "invalid-json"}:
+            raise CliInputError(error.code)
+        raise
+    context = ValidationContext(
+        expected_owner_id=expected_owner_id,
+        expected_source_snapshot_id=expected_source_snapshot_id,
+    )
+    return asdict(validate_event_graph(graph, context=context))
+
+
 def _build_parser() -> JsonArgumentParser:
     parser = JsonArgumentParser(prog="kd.py")
     commands = parser.add_subparsers(dest="command", required=True)
 
     validate = commands.add_parser("validate-draft")
     validate.add_argument("path")
+
+    validate_graph = commands.add_parser("validate-event-graph")
+    validate_graph.add_argument("path")
+    validate_graph.add_argument("--expected-owner-id", required=True)
+    validate_graph.add_argument("--expected-source-snapshot-id", required=True)
 
     state_transition = commands.add_parser("transition")
     state_transition.add_argument("--state", required=True)
@@ -153,6 +227,16 @@ def _run(arguments: Sequence[str]) -> Dict[str, Any]:
     if options.command == "validate-draft":
         manifest = validate_draft(Path(options.path))
         return {"ok": True, "manifest": [asdict(record) for record in manifest]}
+
+    if options.command == "validate-event-graph":
+        return {
+            "ok": True,
+            "manifest": _validate_event_graph(
+                options.path,
+                options.expected_owner_id,
+                options.expected_source_snapshot_id,
+            ),
+        }
 
     if options.command == "task-init":
         return {"ok": True, "task": _snapshot_payload(create_task(Path(options.path)))}
@@ -193,6 +277,15 @@ def main(arguments: Optional[Sequence[str]] = None) -> int:
         if error.path is not None:
             detail["path"] = error.path
         _emit({"ok": False, "error": detail}, sys.stderr)
+        return 3
+    except GraphValidationError as error:
+        _emit(
+            {
+                "ok": False,
+                "error": {"code": "event-graph-rejected", "reason": error.code},
+            },
+            sys.stderr,
+        )
         return 3
     except TaskBusyError as error:
         _emit(

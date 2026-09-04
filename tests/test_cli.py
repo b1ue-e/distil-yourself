@@ -1,16 +1,20 @@
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
 CLI = ROOT / "knowledge-distiller" / "scripts" / "kd.py"
 sys.path.insert(0, str(ROOT / "knowledge-distiller" / "scripts"))
 
+import kd as kd_cli  # noqa: E402
+from knowledge_distiller import adapters  # noqa: E402
 from knowledge_distiller.persistence import TaskCoordinator, create_task  # noqa: E402
 
 
@@ -23,6 +27,198 @@ class CliTest(unittest.TestCase):
             text=True,
             check=False,
         )
+
+    def event_graph_arguments(self, path: Path, **overrides: str):
+        arguments = {
+            "expected_owner_id": "owner-1",
+            "expected_source_snapshot_id": "sha256:" + "a" * 64,
+        }
+        arguments.update(overrides)
+        return (
+            "validate-event-graph",
+            str(path),
+            "--expected-owner-id",
+            arguments["expected_owner_id"],
+            "--expected-source-snapshot-id",
+            arguments["expected_source_snapshot_id"],
+        )
+
+    def test_validate_event_graph_emits_stable_canonical_manifest(self) -> None:
+        graph = ROOT / "tests" / "fixtures" / "adapters" / "minimal-valid.json"
+
+        result = self.run_cli(*self.event_graph_arguments(graph))
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            result.stdout,
+            (
+                '{"manifest":{"adapter":{"adapter_version":"1.0.0",'
+                '"name":"synthetic","native_schema_version":"synthetic-1",'
+                '"product_version":"synthetic-1"},'
+                '"canonical_digest":'
+                '"sha256:0e2faa702a5ae1b64c87f2f5fb74634a20a12ced04bc4949e4c8de8a10fae1da",'
+                '"edge_count":0,"event_count":1,'
+                '"schema_version":"knowledge-distiller.event-graph/v1",'
+                '"source_snapshot_id":'
+                '"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},'
+                '"ok":true}\n'
+            ),
+        )
+        self.assertEqual(result.stderr, "")
+
+    def test_validate_event_graph_requires_both_trust_anchors(self) -> None:
+        graph = ROOT / "tests" / "fixtures" / "adapters" / "minimal-valid.json"
+        cases = (
+            ("validate-event-graph", str(graph)),
+            (
+                "validate-event-graph",
+                str(graph),
+                "--expected-owner-id",
+                "owner-1",
+            ),
+            (
+                "validate-event-graph",
+                str(graph),
+                "--expected-source-snapshot-id",
+                "sha256:" + "a" * 64,
+            ),
+        )
+
+        for arguments in cases:
+            with self.subTest(arguments=arguments):
+                result = self.run_cli(*arguments)
+                self.assertEqual(result.returncode, 2)
+                self.assertEqual(
+                    json.loads(result.stderr)["error"],
+                    {"code": "invalid-input", "reason": "invalid-arguments"},
+                )
+                self.assertEqual(result.stdout, "")
+
+    def test_validate_event_graph_rejects_unsafe_files_at_input_boundary(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            missing = root / "missing.json"
+            folder = root / "folder"
+            folder.mkdir()
+            target = root / "target.json"
+            target.write_text("{}", encoding="utf-8")
+            link = root / "link.json"
+            link.symlink_to(target)
+            oversized = root / "oversized.json"
+            with oversized.open("wb") as stream:
+                stream.truncate(adapters.MAX_GRAPH_BYTES + 1)
+
+            cases = (
+                (missing, "source-file-unavailable"),
+                (folder, "unsafe-source-file"),
+                (link, "unsafe-source-file"),
+                (oversized, "source-file-too-large"),
+            )
+            for path, reason in cases:
+                with self.subTest(reason=reason):
+                    result = self.run_cli(*self.event_graph_arguments(path))
+                    self.assertEqual(result.returncode, 2)
+                    self.assertEqual(
+                        json.loads(result.stderr)["error"],
+                        {"code": "invalid-input", "reason": reason},
+                    )
+                    self.assertEqual(result.stdout, "")
+
+    def test_validate_event_graph_maps_encoding_and_syntax_to_exit_two(self) -> None:
+        cases = ((b"\xff", "invalid-utf8"), (b"{", "invalid-json"))
+        for content, reason in cases:
+            with self.subTest(reason=reason), tempfile.TemporaryDirectory() as directory:
+                graph = Path(directory) / "graph.json"
+                graph.write_bytes(content)
+
+                result = self.run_cli(*self.event_graph_arguments(graph))
+
+                self.assertEqual(result.returncode, 2)
+                self.assertEqual(
+                    json.loads(result.stderr)["error"],
+                    {"code": "invalid-input", "reason": reason},
+                )
+                self.assertEqual(result.stdout, "")
+
+    def test_validate_event_graph_maps_duplicate_and_contract_errors_to_exit_three(self) -> None:
+        fixture = ROOT / "tests" / "fixtures" / "adapters" / "minimal-valid.json"
+        semantic_graph = json.loads(fixture.read_text(encoding="utf-8"))
+        semantic_graph["schema_version"] = "unsupported"
+        cases = (
+            (b'{"field":1,"field":2}', "duplicate-json-key"),
+            (
+                json.dumps(semantic_graph, separators=(",", ":")).encode("utf-8"),
+                "unsupported-schema-version",
+            ),
+        )
+        for content, reason in cases:
+            with self.subTest(reason=reason), tempfile.TemporaryDirectory() as directory:
+                graph = Path(directory) / "graph.json"
+                graph.write_bytes(content)
+
+                result = self.run_cli(*self.event_graph_arguments(graph))
+
+                self.assertEqual(result.returncode, 3)
+                self.assertEqual(
+                    json.loads(result.stderr)["error"],
+                    {"code": "event-graph-rejected", "reason": reason},
+                )
+                self.assertEqual(result.stdout, "")
+
+    def test_validate_event_graph_does_not_derive_trust_anchors(self) -> None:
+        graph = ROOT / "tests" / "fixtures" / "adapters" / "minimal-valid.json"
+        cases = (
+            ({"expected_owner_id": "different-owner"}, "owner-context-mismatch"),
+            (
+                {"expected_source_snapshot_id": "sha256:" + "b" * 64},
+                "source-snapshot-context-mismatch",
+            ),
+        )
+        for overrides, reason in cases:
+            with self.subTest(reason=reason):
+                result = self.run_cli(
+                    *self.event_graph_arguments(graph, **overrides)
+                )
+                self.assertEqual(result.returncode, 3)
+                self.assertEqual(
+                    json.loads(result.stderr)["error"],
+                    {"code": "event-graph-rejected", "reason": reason},
+                )
+
+    def test_validate_event_graph_diagnostics_are_redacted(self) -> None:
+        secret = "PRIVATE-SOURCE-CONTENT"
+        owner = "owner-" + secret
+        snapshot = "sha256:" + "b" * 64
+        with tempfile.TemporaryDirectory() as directory:
+            graph = Path(directory) / (secret + ".json")
+            graph.write_text('{"' + secret + '":1}', encoding="utf-8")
+
+            result = self.run_cli(
+                *self.event_graph_arguments(
+                    graph,
+                    expected_owner_id=owner,
+                    expected_source_snapshot_id=snapshot,
+                )
+            )
+
+        self.assertEqual(result.returncode, 3)
+        self.assertEqual(
+            json.loads(result.stderr)["error"],
+            {"code": "event-graph-rejected", "reason": "unknown-field"},
+        )
+        for value in (secret, str(graph), owner, snapshot):
+            self.assertNotIn(value, result.stderr)
+
+    def test_validate_event_graph_closes_descriptor_when_decoding_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            graph = Path(directory) / "graph.json"
+            graph.write_bytes(b"\xff")
+
+            with mock.patch("os.close", wraps=os.close) as close:
+                with self.assertRaises(kd_cli.CliInputError):
+                    kd_cli._run(self.event_graph_arguments(graph))
+
+        close.assert_called_once()
 
     def test_validate_draft_emits_json_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

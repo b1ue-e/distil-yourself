@@ -99,21 +99,21 @@ Expected: PASS.
 - Modify: `tests/test_cli.py`
 - Modify: `knowledge-distiller/scripts/kd.py`
 
-- [ ] **Step 1: Write failing CLI tests**
+- [x] **Step 1: Write failing CLI tests**
 
-Cover `validate-event-graph PATH`, canonical JSON success output, missing/non-regular/oversized/invalid-UTF-8 input, graph rejection at exit code `3`, and diagnostics that expose an error code without source text or absolute paths.
+Cover `validate-event-graph PATH --expected-owner-id ID --expected-source-snapshot-id DIGEST`, canonical JSON success output, missing trust anchors, missing/non-regular/oversized/invalid-UTF-8 input, graph rejection at exit code `3`, and diagnostics that expose an error code without source text or absolute paths.
 
-- [ ] **Step 2: Run the CLI tests red**
+- [x] **Step 2: Run the CLI tests red**
 
 Run: `python3 -m unittest tests.test_cli -v`
 
 Expected: FAIL because the command is absent.
 
-- [ ] **Step 3: Implement the thin local CLI boundary**
+- [x] **Step 3: Implement the thin local CLI boundary**
 
-Open one explicit local regular file without following symlinks, enforce a 64 MiB byte ceiling before parsing, decode strict UTF-8, parse one JSON object, and call the canonical validator. Map malformed input to exit code `2` and contract rejection to exit code `3`. Do not discover files, traverse directories, or invoke a native source tool.
+Open one explicit local regular file without following symlinks, enforce a 64 MiB byte ceiling before parsing, decode through the strict duplicate-key-safe JSON decoder, and call the canonical validator with the caller-supplied immutable owner/snapshot trust anchors. Map missing files, unsafe files, encoding/JSON syntax errors, and missing arguments to exit code `2`; map duplicate keys and canonical contract rejection to exit code `3`. Do not discover files, traverse directories, derive trust anchors from the graph, or invoke a native source tool.
 
-- [ ] **Step 4: Run CLI and adapter tests green**
+- [x] **Step 4: Run CLI and adapter tests green**
 
 Run: `python3 -m unittest tests.test_cli tests.test_adapters -v`
 
