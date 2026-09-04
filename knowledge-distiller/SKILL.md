@@ -25,6 +25,8 @@ Do not trigger for ordinary summarization, generic knowledge questions, or skill
 
 Read [references/workflow.md](references/workflow.md) before changing task phase. Read [references/authorization.md](references/authorization.md) before resolving or reading any source. Read [references/artifact-policy.md](references/artifact-policy.md) before compiling or validating a domain draft.
 
+Before adapter feasibility, compatibility, or canonical-normalization work, read [references/adapter-compatibility.md](references/adapter-compatibility.md) and [references/adapter-contract.md](references/adapter-contract.md). All four native adapters remain blocked and not implemented.
+
 ## Foundation workflow
 
 1. State the selected mode, exact seed or capability, and current milestone limits. Select an explicit owner-only task workspace with the user, then create it with `task-init`.
