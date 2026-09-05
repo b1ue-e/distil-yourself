@@ -137,6 +137,10 @@ python3 knowledge-distiller/scripts/kd.py validate-event-graph GRAPH.json \
 
 当前 adapter-contract 里程碑已完成。对应计划见 [adapter-contract implementation plan](../plans/2026-09-04-knowledge-distiller-adapter-contract.md)。未经用户另行批准，不 push、merge、安装、导出或发布。
 
+下一实施计划已确定为 [core dual-source loop](../plans/2026-09-05-knowledge-distiller-core-dual-source-loop.md)：优先打通一个精确授权的 Lark 云文档与一个精确授权的 Codex 本地 CLI 会话，贯穿授权、只读 broker、版本化 normalization、确定性脱敏、evidence/provenance、critical-question policy 和非可执行 skill draft 编译。Claude Code 与 Trae 在该核心纵向闭环完成后复用同一契约补齐。
+
+该计划目前仅完成设计与任务拆分，所有 checkbox 均未开始；尚未读取真实来源，也尚未把任何 native adapter 从 `blocked` 改为 `supported`。Lark 与 Codex 的真实 fixture 捕获分别设有精确 selector、revision/range、ContentGrant 与 AuthorityAttestation 审批门。计划的最终评审包含独立的代码精简与冗余检查。
+
 ### 产品里程碑
 
 - 四个 native adapters 的 content-authorized redacted fixtures 与版本兼容性验证。
