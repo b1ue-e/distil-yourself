@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 import hashlib
+import unicodedata
 from typing import Any, Optional, Tuple
 
 from . import adapters
@@ -100,7 +101,7 @@ def _exact(value: Any, code: str, maximum: int = 4096) -> str:
     value = adapters._string(value, "/", 1, maximum, code)
     if (value != value.strip() or value.lower() == "latest"
             or any(char in value for char in "*?[]")
-            or any(ord(char) < 32 or ord(char) == 127 for char in value)):
+            or any(unicodedata.category(char) in {"Cc", "Cf", "Zl", "Zp"} for char in value)):
         _reject(code)
     return value
 

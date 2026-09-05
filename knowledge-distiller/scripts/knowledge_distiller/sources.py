@@ -5,10 +5,15 @@ parent's children contiguously from zero. A native block locator is the document
 ID, pinned revision, and native block ID together. Segment/artifact semantics and
 permitted fidelity losses reuse the event graph contract. Raw JSON must first
 pass the existing strict decoder; dictionaries cannot prove duplicate-key absence.
+Documents additionally allow at most 10,000 blocks, 250,000 traversed JSON items
+(including object keys), 64 nesting levels, and 64 MiB canonical UTF-8 JSON.
+The preflight checks these ceilings before typed block normalization.
 """
 
 from dataclasses import dataclass
 import hashlib
+from itertools import chain
+import json
 from typing import Any, Optional, Tuple, Union
 
 from . import adapters
@@ -17,6 +22,9 @@ from .authorization import AuthorizationError, _exact
 
 DOCUMENT_SCHEMA = "knowledge-distiller.document/v1"
 SNAPSHOT_SCHEMA = "knowledge-distiller.source-snapshot/v1"
+MAX_DOCUMENT_BYTES = adapters.MAX_GRAPH_BYTES
+MAX_DOCUMENT_BLOCKS = 10_000
+MAX_DOCUMENT_ITEMS = adapters.MAX_JSON_VALUE_TOKENS
 DOCUMENT_FIELDS = frozenset({"schema_version", "adapter", "source_snapshot_id", "owner",
                              "native_document_id", "revision", "blocks", "fidelity_losses"})
 BLOCK_FIELDS = frozenset({"id", "native_block_id", "parent_block_id", "order", "author",
@@ -159,6 +167,67 @@ def _losses(value: Any, ids: set, document: bool) -> Tuple[FidelityLoss, ...]:
                  for loss in normalized)
 
 
+def _preflight_document(doc: dict) -> None:
+    """Bound work and exact canonical UTF-8 bytes before retaining typed blocks.
+
+    Iterators keep the traversal stack depth-bounded; wide containers are checked
+    before their children are visited. Strings are encoded in small chunks so an
+    oversized value cannot allocate a second unbounded serialized copy.
+    """
+    blocks = adapters._array(doc["blocks"], "/")
+    if len(blocks) > MAX_DOCUMENT_BLOCKS:
+        _reject("document-resource-limit")
+    total_bytes = 0
+    total_items = 0
+    active = set()
+    stack = [(iter((doc,)), None)]
+    while stack:
+        iterator, container_id = stack[-1]
+        try:
+            item = next(iterator)
+        except StopIteration:
+            stack.pop()
+            if container_id is not None:
+                active.remove(container_id)
+            continue
+        total_items += 1
+        if total_items > MAX_DOCUMENT_ITEMS:
+            _reject("document-resource-limit")
+        if type(item) in (dict, list):
+            count = len(item) * (2 if type(item) is dict else 1)
+            if count > MAX_DOCUMENT_ITEMS - total_items:
+                _reject("document-resource-limit")
+            if id(item) in active or len(stack) > adapters.MAX_CANONICAL_DEPTH:
+                _reject("invalid-type")
+            total_bytes += 2 + max(0, len(item) - 1) + (len(item) if type(item) is dict else 0)
+            active.add(id(item))
+            children = chain.from_iterable(item.items()) if type(item) is dict else iter(item)
+            stack.append((children, id(item)))
+        elif type(item) is str:
+            total_bytes += 2
+            # UTF-8 JSON needs at least one byte per character, before escaping.
+            if len(item) > MAX_DOCUMENT_BYTES - total_bytes:
+                _reject("document-too-large")
+            for start in range(0, len(item), 4096):
+                try:
+                    chunk = json.dumps(item[start:start + 4096], ensure_ascii=False).encode("utf-8")
+                except UnicodeEncodeError:
+                    _reject("invalid-type")
+                total_bytes += len(chunk) - 2
+                if total_bytes > MAX_DOCUMENT_BYTES:
+                    _reject("document-too-large")
+        elif item is None:
+            total_bytes += 4
+        elif type(item) is bool:
+            total_bytes += 4 if item else 5
+        elif type(item) is int and -9223372036854775808 <= item <= 9223372036854775807:
+            total_bytes += len(str(item))
+        else:
+            _reject("invalid-type")
+        if total_bytes > MAX_DOCUMENT_BYTES:
+            _reject("document-too-large")
+
+
 def _document(value: Any, context: DocumentValidationContext) -> CanonicalDocument:
     if type(context) is not DocumentValidationContext:
         _reject("invalid-validation-context")
@@ -176,6 +245,7 @@ def _document(value: Any, context: DocumentValidationContext) -> CanonicalDocume
             _reject("invalid-validation-context")
         authors[native_id] = author_id
     doc = adapters._object(value, DOCUMENT_FIELDS, "/")
+    _preflight_document(doc)
     if doc["schema_version"] != DOCUMENT_SCHEMA:
         _reject("unsupported-schema-version")
     identity = _identity(doc["adapter"])
@@ -223,7 +293,7 @@ def _document(value: Any, context: DocumentValidationContext) -> CanonicalDocume
         native_ids.add(native_id)
     losses = _losses(doc["fidelity_losses"], ids, True)
     canonical = adapters._canonical_bytes(doc)
-    if len(canonical) > adapters.MAX_GRAPH_BYTES:
+    if len(canonical) > MAX_DOCUMENT_BYTES:
         _reject("document-too-large")
     return CanonicalDocument(DOCUMENT_SCHEMA, identity, snapshot, owner, native_document_id,
                              revision, tuple(blocks), losses, "sha256:" + hashlib.sha256(canonical).hexdigest())
@@ -241,6 +311,7 @@ def validate_source_snapshot(value: Any, *, payload: Any, raw_bytes: bytes,
                              context: Union[DocumentValidationContext, adapters.ValidationContext]) -> SourceSnapshotManifest:
     """Bind supplied raw bytes and fully validated canonical payload to one manifest.
 
+    The snapshot ID and raw digest both equal SHA-256 of the supplied native bytes.
     The raw bytes are used only for digest/count verification and are not retained.
     Sessions always pass through the complete existing graph validator.
     """
@@ -265,7 +336,7 @@ def validate_source_snapshot(value: Any, *, payload: Any, raw_bytes: bytes,
         item_count = adapters._integer(manifest["source_item_count"], 0, 9223372036854775807, "/")
         raw_digest = "sha256:" + hashlib.sha256(raw_bytes).hexdigest()
         expected_count = len(validated.blocks) if kind == "document" else validated.event_count
-        if (snapshot != validated.source_snapshot_id or identity != validated.adapter
+        if (snapshot != raw_digest or snapshot != validated.source_snapshot_id or identity != validated.adapter
                 or manifest["raw_digest"] != raw_digest or byte_count != len(raw_bytes)
                 or item_count != expected_count or manifest["canonical_digest"] != validated.canonical_digest
                 or manifest["payload_reference"] != validated.canonical_digest):

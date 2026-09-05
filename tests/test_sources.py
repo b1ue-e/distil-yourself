@@ -1,14 +1,18 @@
 import copy
+import hashlib
 import importlib
 import json
 import sys
 import unittest
 from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
+from unittest import mock
 
 from tests.test_authorization import assert_private_error, digest, forbid_side_effects
 
 ROOT = Path(__file__).resolve().parents[1]
+RAW_BYTES = b"synthetic raw"
+RAW_DIGEST = "sha256:" + hashlib.sha256(RAW_BYTES).hexdigest()
 sys.path.insert(0, str(ROOT / "knowledge-distiller" / "scripts"))
 from knowledge_distiller import adapters
 try:
@@ -22,7 +26,7 @@ def document_data():
         "schema_version": "knowledge-distiller.document/v1",
         "adapter": {"name": "synthetic", "adapter_version": "1.0.0",
                     "product_version": "synthetic-1", "native_schema_version": "synthetic-1"},
-        "source_snapshot_id": "sha256:" + "a" * 64,
+        "source_snapshot_id": RAW_DIGEST,
         "owner": {"kind": "user", "id": "owner-1", "verification": "verified-principal"},
         "native_document_id": "doc-1", "revision": "rev-1",
         "blocks": [{"id": "block-1", "native_block_id": "native-1",
@@ -39,7 +43,7 @@ class SourcesTest(unittest.TestCase):
     def setUp(self):
         self.assertIsNotNone(sources, "sources module must be implemented")
         self.context = sources.DocumentValidationContext(
-            expected_owner_id="owner-1", expected_source_snapshot_id="sha256:" + "a" * 64,
+            expected_owner_id="owner-1", expected_source_snapshot_id=RAW_DIGEST,
             expected_revision="rev-1", verified_authors=(("native-1", "owner-1"),),
         )
 
@@ -145,6 +149,14 @@ class SourcesTest(unittest.TestCase):
                     self.validate_snapshot(self.snapshot_data(value), value)
                 self.assertEqual(caught.exception.code, "unsupported-adapter-version")
 
+    def session_data(self):
+        with (ROOT / "tests/fixtures/adapters/minimal-valid.json").open(encoding="utf-8") as fixture:
+            graph = json.load(fixture)
+        graph["source_snapshot_id"] = RAW_DIGEST
+        for event in graph["events"]:
+            event["source_snapshot_id"] = RAW_DIGEST
+        return graph
+
     def snapshot_data(self, payload, kind="document"):
         import hashlib
         return {
@@ -174,8 +186,7 @@ class SourcesTest(unittest.TestCase):
             record.raw_digest = "other"
 
     def test_session_snapshot_reuses_full_event_graph_validator_and_manifest(self):
-        with (ROOT / "tests/fixtures/adapters/minimal-valid.json").open(encoding="utf-8") as fixture:
-            payload = json.load(fixture)
+        payload = self.session_data()
         context = adapters.ValidationContext("owner-1", payload["source_snapshot_id"])
         record = self.validate_snapshot(self.snapshot_data(payload, "session"), payload, context)
         self.assertIs(type(record.payload), adapters.EventGraphManifest)
@@ -209,8 +220,7 @@ class SourcesTest(unittest.TestCase):
         document = document_data()
         document_manifest = self.snapshot_data(document)
         # Load only the checked-in synthetic fixture before arming the guard.
-        with (ROOT / "tests/fixtures/adapters/minimal-valid.json").open(encoding="utf-8") as fixture:
-            graph = json.load(fixture)
+        graph = self.session_data()
         graph_manifest = self.snapshot_data(graph, "session")
         graph_context = adapters.ValidationContext("owner-1", graph["source_snapshot_id"])
         with forbid_side_effects():
@@ -290,13 +300,62 @@ class SourcesTest(unittest.TestCase):
                     self.validate(invalid)
                 assert_private_error(self, caught.exception, code, (secret, locator))
         # The session wrapper must strip even the graph validator's pointer.
-        with (ROOT / "tests/fixtures/adapters/minimal-valid.json").open(encoding="utf-8") as fixture:
-            graph = json.load(fixture)
+        graph = self.session_data()
         graph["events"][0]["content_segments"][0]["type"] = secret
         with self.assertRaises(sources.SourceValidationError) as caught:
             self.validate_snapshot(self.snapshot_data(graph, "session"), graph,
                                    adapters.ValidationContext("owner-1", graph["source_snapshot_id"]))
         assert_private_error(self, caught.exception, "invalid-enum", (secret, locator))
+
+    def test_snapshot_identity_is_the_digest_of_native_bytes(self):
+        for kind, original in (("document", document_data()), ("session", self.session_data())):
+            for mismatch in ("snapshot", "raw-digest", "native-bytes"):
+                with self.subTest(kind=kind, mismatch=mismatch):
+                    payload = copy.deepcopy(original)
+                    if mismatch == "snapshot":
+                        payload["source_snapshot_id"] = "sha256:" + "a" * 64
+                        for event in payload.get("events", []):
+                            event["source_snapshot_id"] = payload["source_snapshot_id"]
+                    manifest = self.snapshot_data(payload, kind)
+                    context = (replace(self.context, expected_source_snapshot_id=payload["source_snapshot_id"])
+                               if kind == "document" else adapters.ValidationContext("owner-1", payload["source_snapshot_id"]))
+                    if mismatch == "raw-digest":
+                        manifest["raw_digest"] = "sha256:" + "b" * 64
+                    raw = b"modified raw!" if mismatch == "native-bytes" else RAW_BYTES
+                    with self.assertRaises(sources.SourceValidationError) as caught:
+                        sources.validate_source_snapshot(manifest, payload=payload, raw_bytes=raw, context=context)
+                    self.assertEqual(caught.exception.code, "snapshot-binding-mismatch")
+
+    def test_document_resource_limits_precede_normalization_and_serialization(self):
+        cases = []
+        blocks = document_data()
+        blocks["blocks"].append(object())
+        cases.append((blocks, "MAX_DOCUMENT_BLOCKS", 1, "document-resource-limit"))
+        items = document_data()
+        items["blocks"][0]["content_segments"] = [object()] * 1000
+        cases.append((items, "MAX_DOCUMENT_ITEMS", 100, "document-resource-limit"))
+        text = document_data()
+        text["blocks"][0]["content_segments"][0]["text"] = "界" * 1000
+        text["blocks"].append(object())
+        cases.append((text, "MAX_DOCUMENT_BYTES", 2048, "document-too-large"))
+        for value, limit, maximum, code in cases:
+            with self.subTest(limit=limit), mock.patch.object(sources, limit, maximum), \
+                    mock.patch.object(adapters, "_canonical_bytes", side_effect=AssertionError("serialization reached")), \
+                    mock.patch.object(sources, "DocumentBlock", side_effect=AssertionError("normalization reached")):
+                self.reject(value, code)
+
+    def test_document_byte_limit_is_exact_for_unicode_and_json_escaping(self):
+        value = document_data()
+        value["blocks"][0]["content_segments"][0]["text"] = "界é😀\n\t\"\\\u0000"
+        size = len(adapters._canonical_bytes(value))
+        with mock.patch.object(sources, "MAX_DOCUMENT_BYTES", size):
+            self.validate(value)
+        with mock.patch.object(sources, "MAX_DOCUMENT_BYTES", size - 1):
+            self.reject(value, "document-too-large")
+        with mock.patch.object(sources, "MAX_DOCUMENT_BLOCKS", 1):
+            self.validate(value)
+        value["blocks"][0]["order"] = True
+        self.reject(value, "invalid-type")
 
 
 if __name__ == "__main__":

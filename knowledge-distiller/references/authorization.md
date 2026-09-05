@@ -58,8 +58,9 @@ authority over somebody else's content. Both records are needed when an exact
 content read includes third-party material; neither substitutes for the other.
 
 Identifiers and purpose are 1..256 UTF-8 bytes. Revision strings are 1..256
-UTF-8 bytes. Selectors and revisions reject whitespace padding, control
-characters, wildcard syntax (`*`, `?`, `[` and `]`), and case-insensitive
+UTF-8 bytes. Selectors and revisions reject whitespace padding, Unicode control
+and format characters (categories `Cc` and `Cf`), line/paragraph separators
+(`Zl` and `Zp`), wildcard syntax (`*`, `?`, `[` and `]`), and case-insensitive
 `latest`. Exactly one revision or closed session range is required. Range
 offsets are integers in 0..9223372036854775807 with `start <= end`; booleans
 are not integers. A range does not include future appended records.

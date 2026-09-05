@@ -133,6 +133,18 @@ class AuthorizationTest(unittest.TestCase):
         for revision in ("", "latest", "LATEST", "rev-*", "rev?"):
             self.reject(reseal(dict(grant_data(), revision=revision)), "invalid-revision")
 
+    def test_exact_bounds_reject_unicode_controls_but_allow_normal_unicode(self):
+        for kind in ("content-grant", "authority-attestation"):
+            for field, code in (("selector", "invalid-selector"), ("revision", "invalid-revision")):
+                for character in ("\u0080", "\u0085", "\u202e", "\u200b", "\ufeff", "\u2028", "\u2029"):
+                    with self.subTest(kind=kind, field=field, character=ascii(character)):
+                        exact = "prefix" + character + "suffix"
+                        value = reseal(dict(grant_data(kind), **{field: exact}))
+                        self.reject(value, code, replace(self.context, **{field: exact}))
+                exact = "文档-é-修订"
+                value = reseal(dict(grant_data(kind), **{field: exact}))
+                self.assertEqual(getattr(self.validate(value, replace(self.context, **{field: exact})), field), exact)
+
     def test_session_ranges_are_pinned_closed_and_immutable(self):
         value = grant_data()
         value.update(selector="session:one", revision=None,
