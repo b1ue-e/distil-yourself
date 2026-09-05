@@ -24,6 +24,16 @@ UTF-8, floats, non-finite numbers, oversized integers, malformed JSON, and
 excessive nesting. An already-materialized dictionary has no duplicate-key
 provenance and the validator does not claim otherwise.
 
+Before materialization, an iterative raw-byte lexical scan enforces at most
+750000 total lexical tokens, 500000 structural tokens, 250000 value tokens,
+200000 string tokens, and 64 nesting levels. Property names count as string and
+value tokens. The scanner follows JSON string escaping so punctuation inside a
+string does not consume structural budget. Budgeting a conservative 384 bytes
+of Python object and slot overhead per lexical token uses less than 275 MiB;
+reserving three complete 64 MiB raw, decoded-text, and canonical buffers keeps
+the conservative peak below the 512 MiB parser ceiling. A resource-budget
+violation rejects the input before `json.loads` materializes containers.
+
 ### Top-level object
 
 | Top-level field | Required | Type | Nullable | Constraints |

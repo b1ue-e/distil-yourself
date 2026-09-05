@@ -257,6 +257,20 @@ class SkillContractTest(unittest.TestCase):
         ):
             self.assertIn(requirement, normalized)
 
+    def test_adapter_contract_defines_json_parser_resource_budgets(self) -> None:
+        normalized = " ".join(
+            ADAPTER_CONTRACT_FILE.read_text(encoding="utf-8").split()
+        )
+        for requirement in (
+            "750000 total lexical tokens",
+            "500000 structural tokens",
+            "250000 value tokens",
+            "200000 string tokens",
+            "64 nesting levels",
+            "below the 512 MiB parser ceiling",
+        ):
+            self.assertIn(requirement, normalized)
+
     def test_adapter_contract_accepts_only_one_synthetic_tuple(self) -> None:
         text = ADAPTER_CONTRACT_FILE.read_text(encoding="utf-8")
         headers, rows = self.markdown_table(text, "| Adapter name |")

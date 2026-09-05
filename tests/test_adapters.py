@@ -91,6 +91,31 @@ class CanonicalGraphTest(unittest.TestCase):
                     adapters.decode_event_graph_json(raw)
                 self.assertEqual(raised.exception.code, code)
 
+    def test_json_preflight_rejects_value_amplification_before_materialization(self) -> None:
+        value_limit = getattr(adapters, "MAX_JSON_VALUE_TOKENS", 250_000)
+        raw = b"[" + (b"0," * value_limit) + b"0]"
+        self.assertLess(len(raw), adapters.MAX_GRAPH_BYTES)
+
+        with self.assertRaises(GraphValidationError) as raised:
+            adapters.decode_event_graph_json(raw)
+
+        self.assertEqual(raised.exception.code, "json-resource-limit")
+
+    def test_json_preflight_ignores_escaped_string_punctuation(self) -> None:
+        self.assertTrue(hasattr(adapters, "_preflight_event_graph_json"))
+        raw = b"[\"{[,:]}\",\"escaped quote: \\\"\"]"
+        limits = (
+            mock.patch.object(adapters, "MAX_JSON_TOKENS", 5),
+            mock.patch.object(adapters, "MAX_JSON_STRUCTURAL_TOKENS", 3),
+            mock.patch.object(adapters, "MAX_JSON_VALUE_TOKENS", 2),
+            mock.patch.object(adapters, "MAX_JSON_STRING_TOKENS", 2),
+        )
+        with limits[0], limits[1], limits[2], limits[3]:
+            self.assertEqual(
+                adapters.decode_event_graph_json(raw),
+                ["{[,:]}", 'escaped quote: "'],
+            )
+
     def test_fixture_passes_through_strict_decoder_and_validator(self) -> None:
         raw = (FIXTURES / "minimal-valid.json").read_bytes()
         graph = adapters.decode_event_graph_json(raw)

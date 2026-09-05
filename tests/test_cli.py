@@ -1,9 +1,11 @@
 import hashlib
 import json
 import os
+import socket
 import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -96,7 +98,7 @@ class CliTest(unittest.TestCase):
 
     def test_validate_event_graph_rejects_unsafe_files_at_input_boundary(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()
             missing = root / "missing.json"
             folder = root / "folder"
             folder.mkdir()
@@ -128,7 +130,7 @@ class CliTest(unittest.TestCase):
         cases = ((b"\xff", "invalid-utf8"), (b"{", "invalid-json"))
         for content, reason in cases:
             with self.subTest(reason=reason), tempfile.TemporaryDirectory() as directory:
-                graph = Path(directory) / "graph.json"
+                graph = Path(directory).resolve() / "graph.json"
                 graph.write_bytes(content)
 
                 result = self.run_cli(*self.event_graph_arguments(graph))
@@ -153,7 +155,7 @@ class CliTest(unittest.TestCase):
         )
         for content, reason in cases:
             with self.subTest(reason=reason), tempfile.TemporaryDirectory() as directory:
-                graph = Path(directory) / "graph.json"
+                graph = Path(directory).resolve() / "graph.json"
                 graph.write_bytes(content)
 
                 result = self.run_cli(*self.event_graph_arguments(graph))
@@ -164,6 +166,23 @@ class CliTest(unittest.TestCase):
                     {"code": "event-graph-rejected", "reason": reason},
                 )
                 self.assertEqual(result.stdout, "")
+
+    def test_validate_event_graph_maps_json_amplification_to_exit_two(self) -> None:
+        value_limit = getattr(adapters, "MAX_JSON_VALUE_TOKENS", 250_000)
+        content = b"[" + (b"0," * value_limit) + b"0]"
+        self.assertLess(len(content), adapters.MAX_GRAPH_BYTES)
+        with tempfile.TemporaryDirectory() as directory:
+            graph = Path(directory).resolve() / "graph.json"
+            graph.write_bytes(content)
+
+            result = self.run_cli(*self.event_graph_arguments(graph))
+
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(
+            json.loads(result.stderr)["error"],
+            {"code": "invalid-input", "reason": "json-resource-limit"},
+        )
+        self.assertEqual(result.stdout, "")
 
     def test_validate_event_graph_does_not_derive_trust_anchors(self) -> None:
         graph = ROOT / "tests" / "fixtures" / "adapters" / "minimal-valid.json"
@@ -190,7 +209,7 @@ class CliTest(unittest.TestCase):
         owner = "owner-" + secret
         snapshot = "sha256:" + "b" * 64
         with tempfile.TemporaryDirectory() as directory:
-            graph = Path(directory) / (secret + ".json")
+            graph = Path(directory).resolve() / (secret + ".json")
             graph.write_text('{"' + secret + '":1}', encoding="utf-8")
 
             result = self.run_cli(
@@ -211,14 +230,189 @@ class CliTest(unittest.TestCase):
 
     def test_validate_event_graph_closes_descriptor_when_decoding_fails(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            graph = Path(directory) / "graph.json"
+            graph = Path(directory).resolve() / "graph.json"
             graph.write_bytes(b"\xff")
 
-            with mock.patch("os.close", wraps=os.close) as close:
+            with mock.patch("os.close", wraps=os.close) as close, mock.patch(
+                "os.read", wraps=os.read
+            ) as read:
                 with self.assertRaises(kd_cli.CliInputError):
                     kd_cli._run(self.event_graph_arguments(graph))
 
-        close.assert_called_once()
+        graph_descriptor = read.call_args_list[0].args[0]
+        self.assertIn(mock.call(graph_descriptor), close.call_args_list)
+
+    def event_graph_metadata(self, source: os.stat_result, **overrides: int):
+        values = {
+            name: getattr(source, name)
+            for name in (
+                "st_dev",
+                "st_ino",
+                "st_size",
+                "st_mtime_ns",
+                "st_ctime_ns",
+                "st_mode",
+                "st_nlink",
+                "st_blocks",
+            )
+        }
+        values.update(overrides)
+        return SimpleNamespace(**values)
+
+    def test_validate_event_graph_rejects_growth_during_read(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            graph = Path(directory).resolve() / "graph.json"
+            graph.write_bytes(b"{}")
+            metadata = graph.stat()
+            before = self.event_graph_metadata(metadata)
+            after = self.event_graph_metadata(metadata, st_size=3)
+
+            with mock.patch.object(
+                kd_cli.os, "fstat", side_effect=(before, after)
+            ), mock.patch.object(kd_cli.os, "read", side_effect=(b"{} ", b"")):
+                with self.assertRaises(kd_cli.CliInputError) as raised:
+                    kd_cli._read_event_graph(str(graph))
+
+        self.assertEqual(raised.exception.reason, "input-changed")
+
+    def test_validate_event_graph_rejects_truncation_to_valid_json(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            graph = Path(directory).resolve() / "graph.json"
+            graph.write_bytes(b"{} ")
+            metadata = graph.stat()
+            before = self.event_graph_metadata(metadata)
+            after = self.event_graph_metadata(metadata, st_size=2)
+
+            with mock.patch.object(
+                kd_cli.os, "fstat", side_effect=(before, after)
+            ), mock.patch.object(kd_cli.os, "read", side_effect=(b"{}", b"")):
+                with self.assertRaises(kd_cli.CliInputError) as raised:
+                    kd_cli._read_event_graph(str(graph))
+
+        self.assertEqual(raised.exception.reason, "input-changed")
+
+    def test_validate_event_graph_rejects_same_size_mutation_during_read(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            graph = Path(directory).resolve() / "graph.json"
+            graph.write_bytes(b"{}")
+            metadata = graph.stat()
+            before = self.event_graph_metadata(metadata)
+            after = self.event_graph_metadata(
+                metadata,
+                st_mtime_ns=metadata.st_mtime_ns + 1,
+                st_ctime_ns=metadata.st_ctime_ns + 1,
+            )
+
+            with mock.patch.object(
+                kd_cli.os, "fstat", side_effect=(before, after)
+            ), mock.patch.object(kd_cli.os, "read", side_effect=(b"[]", b"")):
+                with self.assertRaises(kd_cli.CliInputError) as raised:
+                    kd_cli._read_event_graph(str(graph))
+
+        self.assertEqual(raised.exception.reason, "input-changed")
+
+    def test_validate_event_graph_rejects_symlinked_ancestor(self) -> None:
+        fixture = ROOT / "tests" / "fixtures" / "adapters" / "minimal-valid.json"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            real = root / "real"
+            real.mkdir()
+            graph = real / "graph.json"
+            graph.write_bytes(fixture.read_bytes())
+            link = root / "linked"
+            link.symlink_to(real, target_is_directory=True)
+
+            result = self.run_cli(*self.event_graph_arguments(link / "graph.json"))
+
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(
+            json.loads(result.stderr)["error"],
+            {"code": "invalid-input", "reason": "unsafe-source-file"},
+        )
+
+    def test_validate_event_graph_rejects_hardlink_and_sparse_file(self) -> None:
+        fixture = ROOT / "tests" / "fixtures" / "adapters" / "minimal-valid.json"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            original = root / "original.json"
+            original.write_bytes(fixture.read_bytes())
+            hardlink = root / "hardlink.json"
+            os.link(original, hardlink)
+            sparse = root / "sparse.json"
+            with sparse.open("wb") as stream:
+                stream.truncate(4096)
+
+            for graph in (hardlink, sparse):
+                with self.subTest(kind=graph.stem):
+                    result = self.run_cli(*self.event_graph_arguments(graph))
+                    self.assertEqual(result.returncode, 2)
+                    self.assertEqual(
+                        json.loads(result.stderr)["error"],
+                        {"code": "invalid-input", "reason": "unsafe-source-file"},
+                    )
+
+    def test_validate_event_graph_rejects_special_files_without_blocking(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            special_files = []
+            if hasattr(os, "mkfifo"):
+                fifo = root / "graph.fifo"
+                os.mkfifo(fifo)
+                special_files.append(fifo)
+            listener = None
+            if hasattr(socket, "AF_UNIX"):
+                socket_path = root / "graph.socket"
+                listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                try:
+                    listener.bind(str(socket_path))
+                except OSError:
+                    listener.close()
+                    listener = None
+                else:
+                    special_files.append(socket_path)
+            try:
+                for graph in special_files:
+                    with self.subTest(kind=graph.suffix):
+                        result = self.run_cli(*self.event_graph_arguments(graph))
+                        self.assertEqual(result.returncode, 2)
+                        self.assertEqual(
+                            json.loads(result.stderr)["error"],
+                            {
+                                "code": "invalid-input",
+                                "reason": "unsafe-source-file",
+                            },
+                        )
+            finally:
+                if listener is not None:
+                    listener.close()
+
+    def test_validate_event_graph_rejects_unsafe_path_components(self) -> None:
+        fixture = ROOT / "tests" / "fixtures" / "adapters" / "minimal-valid.json"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            graph = root / "graph.json"
+            graph.write_bytes(fixture.read_bytes())
+            unsafe_paths = (
+                "",
+                str(root / ".." / root.name / "graph.json"),
+                str(root) + "//graph.json",
+            )
+            for path in unsafe_paths:
+                with self.subTest(path=path):
+                    result = self.run_cli(*self.event_graph_arguments(path))
+                    self.assertEqual(result.returncode, 2)
+                    self.assertEqual(
+                        json.loads(result.stderr)["error"],
+                        {"code": "invalid-input", "reason": "unsafe-source-file"},
+                    )
+
+    def test_validate_event_graph_accepts_exact_raw_size_boundary(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            graph = Path(directory).resolve() / "graph.json"
+            graph.write_bytes(b"{}")
+
+            with mock.patch.object(kd_cli, "MAX_GRAPH_BYTES", 2):
+                self.assertEqual(kd_cli._read_event_graph(str(graph)), b"{}")
 
     def test_validate_draft_emits_json_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

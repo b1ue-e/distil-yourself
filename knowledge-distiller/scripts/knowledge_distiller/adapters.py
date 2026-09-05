@@ -10,7 +10,12 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 SCHEMA_VERSION = "knowledge-distiller.event-graph/v1"
 MAX_EVENT_BYTES = 1024 * 1024
 MAX_GRAPH_BYTES = 64 * 1024 * 1024
-MAX_CANONICAL_DEPTH = 64
+MAX_JSON_TOKENS = 750_000
+MAX_JSON_STRUCTURAL_TOKENS = 500_000
+MAX_JSON_VALUE_TOKENS = 250_000
+MAX_JSON_STRING_TOKENS = 200_000
+MAX_JSON_NESTING_DEPTH = 64
+MAX_CANONICAL_DEPTH = MAX_JSON_NESTING_DEPTH
 SNAPSHOT_ID = re.compile(r"sha256:[0-9a-f]{64}\Z")
 
 ROOT_FIELDS = frozenset(
@@ -235,6 +240,72 @@ def _decoded_integer(value: str) -> int:
     return int(value)
 
 
+def _preflight_event_graph_json(raw: bytes) -> None:
+    """Bound JSON materialization with one iterative lexical scan."""
+
+    # 750k tokens at a conservative 384 bytes of Python object/slot overhead
+    # consume under 275 MiB. Three 64 MiB byte/text/canonical buffers keep the
+    # conservative process estimate below the 512 MiB parser ceiling.
+    total_tokens = 0
+    structural_tokens = 0
+    value_tokens = 0
+    string_tokens = 0
+    depth = 0
+    index = 0
+    length = len(raw)
+    structural = b"{}[],:"
+    whitespace = b" \t\r\n"
+
+    while index < length:
+        byte = raw[index]
+        if byte in whitespace:
+            index += 1
+            continue
+        if byte == 0x22:
+            total_tokens += 1
+            value_tokens += 1
+            string_tokens += 1
+            index += 1
+            while index < length:
+                byte = raw[index]
+                if byte == 0x5C:
+                    index += 2
+                elif byte == 0x22:
+                    index += 1
+                    break
+                else:
+                    index += 1
+        elif byte in structural:
+            total_tokens += 1
+            structural_tokens += 1
+            if byte in b"{[":
+                depth += 1
+                if depth > MAX_JSON_NESTING_DEPTH:
+                    _reject("json-too-deep", "/")
+            elif byte in b"}]" and depth:
+                depth -= 1
+            index += 1
+        else:
+            total_tokens += 1
+            value_tokens += 1
+            index += 1
+            while (
+                index < length
+                and raw[index] not in whitespace
+                and raw[index] not in structural
+                and raw[index] != 0x22
+            ):
+                index += 1
+
+        if (
+            total_tokens > MAX_JSON_TOKENS
+            or structural_tokens > MAX_JSON_STRUCTURAL_TOKENS
+            or value_tokens > MAX_JSON_VALUE_TOKENS
+            or string_tokens > MAX_JSON_STRING_TOKENS
+        ):
+            _reject("json-resource-limit", "/")
+
+
 def decode_event_graph_json(raw: bytes) -> Any:
     """Decode one raw graph through the duplicate-key-safe JSON boundary."""
 
@@ -246,6 +317,7 @@ def decode_event_graph_json(raw: bytes) -> Any:
         text = raw.decode("utf-8")
     except UnicodeDecodeError:
         _reject("invalid-utf8", "/")
+    _preflight_event_graph_json(raw)
     try:
         return json.loads(
             text,
