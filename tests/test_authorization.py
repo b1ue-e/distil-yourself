@@ -3,8 +3,10 @@ import importlib
 import json
 import sys
 import unittest
+from contextlib import ExitStack, contextmanager
 from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "knowledge-distiller" / "scripts"))
 try:
@@ -40,6 +42,37 @@ def grant_data(kind="content-grant"):
 def reseal(value):
     value["decision_digest"] = digest({k: v for k, v in value.items() if k != "decision_digest"})
     return value
+
+
+@contextmanager
+def forbid_side_effects():
+    """Guard real boundary primitives while leaving all validation code real."""
+    boundaries = (
+        "builtins.open", "io.open", "os.open", "os.read", "os.write",
+        "os.listdir", "os.scandir", "os.stat", "os.lstat", "os.mkdir",
+        "os.remove", "os.unlink", "os.rmdir", "os.rename", "os.replace",
+        "os.chmod", "os.link", "os.symlink", "os.system", "os.fork",
+        "subprocess.Popen", "socket.socket", "socket.getaddrinfo",
+    )
+    with ExitStack() as stack:
+        guards = [stack.enter_context(mock.patch(
+            boundary, side_effect=AssertionError("validation attempted a side effect"),
+        )) for boundary in boundaries]
+        yield
+        # Also catch attempted effects that a validator might swallow.
+        for guard in guards:
+            guard.assert_not_called()
+
+
+def assert_private_error(test, error, expected_code, secrets):
+    test.assertEqual(str(error), expected_code)
+    test.assertEqual(error.code, expected_code)
+    test.assertEqual(error.args, (expected_code,))
+    test.assertIsNone(getattr(error, "pointer", None))
+    for diagnostic in (str(error), repr(error.args), repr(vars(error))):
+        test.assertLess(len(diagnostic), 160)
+        for secret in secrets:
+            test.assertNotIn(secret, diagnostic)
 
 
 class AuthorizationTest(unittest.TestCase):
@@ -156,6 +189,67 @@ class AuthorizationTest(unittest.TestCase):
                 self.validate(dict(grant_data(), **{field: value}))
             self.assertLess(len(str(caught.exception)), 80)
             self.assertNotIn("private-source", str(caught.exception))
+
+    def test_authorization_is_pure_for_valid_and_rejected_records(self):
+        values = [grant_data(kind) for kind in ("content-grant", "authority-attestation")]
+        with forbid_side_effects():
+            for value in values:
+                self.validate(value)
+                self.reject(dict(value, revoked=True), "authorization-revoked")
+                self.reject(dict(value, selector="private-source/*"), "invalid-selector")
+
+    def test_every_authorization_diagnostic_is_bounded_and_private(self):
+        secret = "SENSITIVE-CONTENT-DO-NOT-EMIT"
+        selector = "document:PRIVATE-SELECTOR-DO-NOT-EMIT"
+        for kind in ("content-grant", "authority-attestation"):
+            value = reseal(dict(grant_data(kind), selector=selector, purpose=secret))
+            context = replace(self.context, selector=selector, purpose=secret)
+            validator = (authorization.validate_content_grant if kind == "content-grant"
+                         else authorization.validate_authority_attestation)
+            cases = [
+                (dict(value, **{secret: selector}), context, "unknown-field"),
+                ({key: item for key, item in value.items() if key != "task_id"}, context, "missing-field"),
+                (dict(value, record_type=secret), context, "invalid-record-type"),
+                (value, secret, "invalid-authorization-context"),
+                (dict(value, selector=selector + "*"), context, "invalid-selector"),
+                (dict(value, revision=secret + "*"), context, "invalid-revision"),
+                (dict(value, revision=None), context, "invalid-source-bound"),
+                (dict(value, operation=secret), context, "invalid-operation"),
+                (dict(value, task_id=secret), context, "authorization-context-mismatch"),
+                (dict(value, revoked=secret), context, "invalid-type"),
+                (dict(value, record_id=secret * 20), context, "invalid-identifier"),
+                (dict(value, decision_digest=secret), context, "invalid-snapshot-id"),
+                (value, replace(context, task_active=False), "task-inactive"),
+                (dict(value, revoked=True), context, "authorization-revoked"),
+                (dict(value, issued_at=secret), context, "invalid-time-bound"),
+                (dict(value, issued_at=1600), context, "authorization-not-yet-valid"),
+                (dict(value, expires_at=1500), context, "authorization-expired"),
+                (dict(value, derived_processing_until=1499), context, "derived-processing-expired"),
+                (dict(value, issuer=secret), context, "unauthenticated-issuer"),
+                (dict(value, record_id=secret), context, "decision-digest-mismatch"),
+                (value, replace(context, authenticated_issuers=[secret]), "invalid-authorization-context"),
+                (value, replace(context, session_range=secret), "invalid-authorization-context"),
+                (value, replace(context, authenticated_issuers=(secret * 20,)), "invalid-identifier"),
+                (dict(value, revision=None, session_range={"start": 3, "end": 2}), context, "invalid-source-bound"),
+                (dict(value, revision=None, session_range={"start": 0, "end": 2, secret: selector}), context, "unknown-field"),
+                (dict(value, revision=None, session_range={"start": 0, "end": secret}), context, "invalid-time-bound"),
+                (dict(value, revision=None, session_range={"start": 0, "end": 2}),
+                 replace(context, revision=None, session_range=authorization.SessionRange(0, 3)),
+                 "authorization-context-mismatch"),
+            ]
+            if kind == "authority-attestation":
+                cases.extend([
+                    (dict(value, issuer="owner-1"), context, "self-attestation"),
+                    (dict(value, authority_basis=secret), context, "invalid-authority-basis"),
+                    (dict(value, content_owner=secret), context, "authorization-context-mismatch"),
+                ])
+            else:
+                cases.append((dict(value, issuer="authority-1"), context, "invalid-grant-issuer"))
+            for index, (invalid, request_context, code) in enumerate(cases):
+                with self.subTest(kind=kind, case=index, code=code):
+                    with self.assertRaises(authorization.AuthorizationError) as caught:
+                        validator(invalid, context=request_context)
+                    assert_private_error(self, caught.exception, code, (secret, selector))
 
 
 if __name__ == "__main__":

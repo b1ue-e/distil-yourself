@@ -6,7 +6,7 @@ import unittest
 from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
 
-from tests.test_authorization import digest
+from tests.test_authorization import assert_private_error, digest, forbid_side_effects
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "knowledge-distiller" / "scripts"))
@@ -136,9 +136,14 @@ class SourcesTest(unittest.TestCase):
         self.reject(value, "invalid-fidelity-loss")
 
     def test_no_native_adapter_versions_are_added(self):
-        value = document_data()
-        value["adapter"]["name"] = "lark"
-        self.reject(value, "unsupported-adapter-version")
+        for name in ("lark", "codex", "claude-code", "trae"):
+            with self.subTest(name=name):
+                value = document_data()
+                value["adapter"]["name"] = name
+                self.reject(value, "unsupported-adapter-version")
+                with self.assertRaises(sources.SourceValidationError) as caught:
+                    self.validate_snapshot(self.snapshot_data(value), value)
+                self.assertEqual(caught.exception.code, "unsupported-adapter-version")
 
     def snapshot_data(self, payload, kind="document"):
         import hashlib
@@ -199,6 +204,99 @@ class SourcesTest(unittest.TestCase):
             del invalid[field]
             with self.assertRaises(sources.SourceValidationError):
                 self.validate_snapshot(invalid, payload)
+
+    def test_source_validation_has_no_io_for_documents_and_sessions(self):
+        document = document_data()
+        document_manifest = self.snapshot_data(document)
+        # Load only the checked-in synthetic fixture before arming the guard.
+        with (ROOT / "tests/fixtures/adapters/minimal-valid.json").open(encoding="utf-8") as fixture:
+            graph = json.load(fixture)
+        graph_manifest = self.snapshot_data(graph, "session")
+        graph_context = adapters.ValidationContext("owner-1", graph["source_snapshot_id"])
+        with forbid_side_effects():
+            self.validate(document)
+            self.reject(dict(document, revision="latest"), "invalid-revision")
+            self.validate_snapshot(document_manifest, document)
+            self.validate_snapshot(graph_manifest, graph, graph_context)
+            for manifest, payload, context in ((document_manifest, document, self.context),
+                                               (graph_manifest, graph, graph_context)):
+                with self.assertRaises(sources.SourceValidationError) as caught:
+                    self.validate_snapshot(dict(manifest, source_byte_count=0), payload, context)
+                self.assertEqual(caught.exception.code, "snapshot-binding-mismatch")
+
+    def test_unknown_fields_in_artifact_loss_and_snapshot_bindings_are_private(self):
+        secret = "SENSITIVE-UNKNOWN-FIELD-DO-NOT-EMIT"
+        locator = "document:PRIVATE-LOCATOR-DO-NOT-EMIT"
+        payload = document_data()
+        payload["blocks"][0]["artifact_locators"] = [
+            {"id": "artifact-1", "kind": "document", "locator": locator, "revision": "rev-1"},
+        ]
+        payload["fidelity_losses"] = [
+            {"code": "non-semantic-formatting", "block_id": "block-1",
+             "native_fact": "formatting", "reason": "unrepresentable"},
+        ]
+        self.validate(payload)
+        for path in (("blocks", 0, "artifact_locators", 0), ("fidelity_losses", 0)):
+            invalid = copy.deepcopy(payload)
+            nested = invalid
+            for part in path:
+                nested = nested[part]
+            nested[secret] = locator
+            with self.assertRaises(sources.SourceValidationError) as caught:
+                self.validate(invalid)
+            assert_private_error(self, caught.exception, "unknown-field", (secret, locator))
+        for path in (("adapter",), ("owner",), ("fidelity_losses", 0)):
+            manifest = self.snapshot_data(payload)
+            nested = manifest
+            for part in path:
+                nested = nested[part]
+            nested[secret] = locator
+            with self.assertRaises(sources.SourceValidationError) as caught:
+                self.validate_snapshot(manifest, payload)
+            assert_private_error(self, caught.exception, "unknown-field", (secret, locator))
+
+    def test_nested_source_diagnostics_never_disclose_source_values(self):
+        secret = "SENSITIVE-SOURCE-TEXT-DO-NOT-EMIT"
+        locator = "document:PRIVATE-LOCATOR-DO-NOT-EMIT"
+        base = document_data()
+        base["blocks"][0]["content_segments"][0]["text"] = secret
+        base["blocks"][0]["artifact_locators"] = [
+            {"id": "artifact-1", "kind": "document", "locator": locator, "revision": "rev-1"},
+        ]
+        base["fidelity_losses"] = [
+            {"code": "non-semantic-formatting", "block_id": "block-1",
+             "native_fact": "formatting", "reason": "unrepresentable"},
+        ]
+        cases = (
+            (("adapter", "product_version"), secret, "unsupported-adapter-version"),
+            (("owner", "id"), secret, "owner-context-mismatch"),
+            (("blocks", 0, "author", "kind"), secret, "invalid-enum"),
+            (("blocks", 0, "parent_block_id"), secret, "invalid-block-parent"),
+            (("blocks", 0, "native_block_id"), secret * 20, "invalid-identifier"),
+            (("blocks", 0, "content_segments", 0, "type"), secret, "invalid-enum"),
+            (("blocks", 0, "content_segments", 0, "text"), {secret: locator}, "invalid-type"),
+            (("blocks", 0, "artifact_locators", 0, "kind"), secret, "invalid-enum"),
+            (("fidelity_losses", 0, "code"), secret, "invalid-fidelity-loss"),
+            (("fidelity_losses", 0, "block_id"), secret, "unresolved-reference"),
+        )
+        for path, replacement, code in cases:
+            with self.subTest(path=path, code=code):
+                invalid = copy.deepcopy(base)
+                target = invalid
+                for part in path[:-1]:
+                    target = target[part]
+                target[path[-1]] = replacement
+                with self.assertRaises(sources.SourceValidationError) as caught:
+                    self.validate(invalid)
+                assert_private_error(self, caught.exception, code, (secret, locator))
+        # The session wrapper must strip even the graph validator's pointer.
+        with (ROOT / "tests/fixtures/adapters/minimal-valid.json").open(encoding="utf-8") as fixture:
+            graph = json.load(fixture)
+        graph["events"][0]["content_segments"][0]["type"] = secret
+        with self.assertRaises(sources.SourceValidationError) as caught:
+            self.validate_snapshot(self.snapshot_data(graph, "session"), graph,
+                                   adapters.ValidationContext("owner-1", graph["source_snapshot_id"]))
+        assert_private_error(self, caught.exception, "invalid-enum", (secret, locator))
 
 
 if __name__ == "__main__":
