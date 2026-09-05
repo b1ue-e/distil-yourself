@@ -5,6 +5,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+README_FILE = ROOT / "README.md"
 SKILL_DIR = ROOT / "knowledge-distiller"
 SKILL_FILE = SKILL_DIR / "SKILL.md"
 EVAL_FILE = SKILL_DIR / "evals" / "evals.json"
@@ -387,6 +388,52 @@ class SkillContractTest(unittest.TestCase):
         for command in ("task-init", "task-transition", "task-inspect"):
             self.assertIn(command, text)
         self.assertNotIn("persistent checkpoints, sealed evaluation", text)
+
+    def test_public_guidance_routes_canonical_graphs_through_the_bounded_gate(self) -> None:
+        guidance = {
+            "SKILL.md": (
+                " ".join(self.skill_text().split()),
+                "python3 scripts/kd.py validate-event-graph /absolute/path/to/graph.json "
+                "--expected-owner-id OWNER_ID --expected-source-snapshot-id "
+                "sha256:<64 lowercase hex>",
+            ),
+            "README.md": (
+                " ".join(README_FILE.read_text(encoding="utf-8").split()),
+                "python3 knowledge-distiller/scripts/kd.py validate-event-graph "
+                "/absolute/path/to/graph.json --expected-owner-id OWNER_ID "
+                "--expected-source-snapshot-id sha256:<64 lowercase hex>",
+            ),
+        }
+        for name, (text, command) in guidance.items():
+            with self.subTest(file=name):
+                self.assertIn("adapter-compatibility.md", text)
+                self.assertIn("adapter-contract.md", text)
+                self.assertIn(command, text)
+
+    def test_public_guidance_limits_what_event_graph_validation_proves(self) -> None:
+        for name, path in (
+            ("SKILL.md", SKILL_FILE),
+            ("README.md", README_FILE),
+        ):
+            text = " ".join(path.read_text(encoding="utf-8").lower().split())
+            with self.subTest(file=name):
+                self.assertIn(
+                    "contract and synthetic conformance harness exist",
+                    text,
+                )
+                self.assertIn(
+                    "lark, codex, claude code, and trae native adapters remain "
+                    "blocked and unimplemented",
+                    text,
+                )
+                self.assertIn(
+                    "validation proves only that the graph conforms to the listed "
+                    "synthetic tuple and canonical contract",
+                    text,
+                )
+                self.assertIn("does not authorize a source read", text)
+                self.assertIn("does not authorize native tool invocation", text)
+                self.assertIn("does not make any native adapter supported", text)
 
     def test_checkpoint_guidance_does_not_expand_authority(self) -> None:
         text = self.skill_text().lower()

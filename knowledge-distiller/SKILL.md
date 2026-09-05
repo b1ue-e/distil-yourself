@@ -9,7 +9,7 @@ description: Use when a user wants to distill their documents, agent sessions, d
 
 Turn explicitly authorized personal evidence into one small, behaviorally testable domain-skill draft. Preserve the owner's decision cues, priorities, constraints, exceptions, and recovery strategies instead of merely summarizing source material.
 
-This repository currently implements the deterministic foundation and local durable state checkpoints. Source adapters, trusted ingestion, sealed evaluation, signatures, export, installation, and publication are not implemented.
+This repository implements the deterministic foundation and local durable state checkpoints. The canonical adapter contract and synthetic conformance harness exist; Lark, Codex, Claude Code, and Trae native adapters remain blocked and unimplemented. Trusted ingestion, sealed evaluation, signatures, export, installation, and publication are also not implemented.
 
 ## Route the request
 
@@ -25,7 +25,7 @@ Do not trigger for ordinary summarization, generic knowledge questions, or skill
 
 Read [references/workflow.md](references/workflow.md) before changing task phase. Read [references/authorization.md](references/authorization.md) before resolving or reading any source. Read [references/artifact-policy.md](references/artifact-policy.md) before compiling or validating a domain draft.
 
-Before adapter feasibility, compatibility, or canonical-normalization work, read [references/adapter-compatibility.md](references/adapter-compatibility.md) and [references/adapter-contract.md](references/adapter-contract.md). All four native adapters remain blocked and not implemented.
+For adapter compatibility questions or canonical normalization, read [references/adapter-compatibility.md](references/adapter-compatibility.md) and [references/adapter-contract.md](references/adapter-contract.md), then use `validate-event-graph` below.
 
 ## Foundation workflow
 
@@ -46,6 +46,7 @@ Run commands from the skill directory:
 
 ```bash
 python3 scripts/kd.py validate-draft /absolute/path/to/domain-skill
+python3 scripts/kd.py validate-event-graph /absolute/path/to/graph.json --expected-owner-id OWNER_ID --expected-source-snapshot-id sha256:<64 lowercase hex>
 python3 scripts/kd.py task-init /absolute/path/to/task-workspace
 python3 scripts/kd.py task-inspect /absolute/path/to/task-workspace
 python3 scripts/kd.py task-transition /absolute/path/to/task-workspace --event start-discover --facts '{"has_seed":true}'
@@ -53,6 +54,8 @@ python3 scripts/kd.py transition --state '{"phase":"init","epoch":0}' --event st
 ```
 
 `transition` is a stateless simulation command; use the `task-*` commands for real task progress. Treat a rejected transition, corrupt workspace, or rejected artifact as a blocking result. Do not weaken policy or edit the user's source to make validation pass.
+
+Successful event-graph validation proves only that the graph conforms to the listed synthetic tuple and canonical contract. It does not authorize a source read, does not authorize native tool invocation, and does not make any native adapter supported.
 
 A successful checkpoint does not grant source access and does not authorize external mutation. It records only typed workflow state and hashes of secret-free transition facts.
 

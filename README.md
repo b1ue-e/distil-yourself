@@ -17,7 +17,7 @@ The proposed workflow:
 5. validate it with historical, boundary, trigger, and safety evaluations;
 6. require explicit approval before export or lifecycle updates.
 
-Initial source adapters are planned for Lark documents and Codex, Claude Code, and Trae sessions.
+The [adapter compatibility matrix](knowledge-distiller/references/adapter-compatibility.md) and [canonical adapter contract](knowledge-distiller/references/adapter-contract.md) define the current boundary: the canonical adapter contract and synthetic conformance harness exist; Lark, Codex, Claude Code, and Trae native adapters remain blocked and unimplemented.
 
 ## V1 boundaries
 
@@ -38,6 +38,14 @@ python3 knowledge-distiller/scripts/kd.py validate-draft /absolute/path/to/domai
 ```
 
 The Foundation CLI has no caller-controlled asset allowlist, so it rejects every asset. A future compiler may call the library validator with its own reviewed, compiler-controlled template digests.
+
+Validate a candidate canonical event graph against the listed synthetic adapter tuple and explicit trust anchors:
+
+```bash
+python3 knowledge-distiller/scripts/kd.py validate-event-graph /absolute/path/to/graph.json --expected-owner-id OWNER_ID --expected-source-snapshot-id sha256:<64 lowercase hex>
+```
+
+Successful event-graph validation proves only that the graph conforms to the listed synthetic tuple and canonical contract. It does not authorize a source read, does not authorize native tool invocation, and does not make any native adapter supported.
 
 Simulate a guarded workflow transition:
 
@@ -67,7 +75,7 @@ Checkpoint facts are a closed set of booleans and one phase enum. Never place so
 
 ## Foundation limits
 
-This milestone does not implement network or local-session source adapters, the trusted request broker, parser sandbox, renewable/distributed leases, sealed evaluator, signed approval subjects, export/purge brokers, installation, or publication. Passing local validation or writing a checkpoint authorizes none of those operations.
+This milestone does not implement the trusted request broker, parser sandbox, renewable/distributed leases, sealed evaluator, signed approval subjects, export/purge brokers, installation, or publication. Passing local validation or writing a checkpoint authorizes none of those operations.
 
 ## Repository status
 
