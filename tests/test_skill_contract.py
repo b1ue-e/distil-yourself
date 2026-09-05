@@ -486,6 +486,19 @@ class SkillContractTest(unittest.TestCase):
                 self.assertIn("does not authorize native tool invocation", text)
                 self.assertIn("does not make any native adapter supported", text)
 
+    def test_readme_documents_cli_exit_code_categories(self) -> None:
+        text = " ".join(README_FILE.read_text(encoding="utf-8").split())
+        self.assertIn(
+            "Input-boundary failures, including encoding, JSON, resource-limit, "
+            "and unsafe-source errors, exit with code `2`.",
+            text,
+        )
+        self.assertIn(
+            "Duplicate JSON keys, canonical event-graph contract rejections, "
+            "rejected artifacts, and rejected transitions exit with code `3`",
+            text,
+        )
+
     def test_checkpoint_guidance_does_not_expand_authority(self) -> None:
         text = self.skill_text().lower()
         self.assertIn("does not grant source access", text)

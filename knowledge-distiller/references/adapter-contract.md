@@ -21,8 +21,10 @@ Raw JSON must pass through `decode_event_graph_json` before
 `validate_event_graph`. The strict decoder rejects duplicate keys at every
 nesting level before a dictionary can erase that evidence, as well as invalid
 UTF-8, floats, non-finite numbers, oversized integers, malformed JSON, and
-excessive nesting. An already-materialized dictionary has no duplicate-key
-provenance and the validator does not claim otherwise.
+excessive nesting. After materialization, it iteratively scans every string in
+object keys, object values, and array values and rejects lone Unicode surrogates
+with `invalid-unicode-scalar`. An already-materialized dictionary has no
+duplicate-key provenance and the validator does not claim otherwise.
 
 Before UTF-8 decoding or materialization, an iterative raw-byte lexical scan
 enforces at most 750000 total lexical tokens, 500000 structural tokens, 250000

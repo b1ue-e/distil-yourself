@@ -306,6 +306,24 @@ def _preflight_event_graph_json(raw: bytes) -> int:
     return total_tokens
 
 
+def _reject_invalid_unicode_scalars(value: Any) -> None:
+    stack = [iter((value,))]
+    while stack:
+        try:
+            item = next(stack[-1])
+        except StopIteration:
+            stack.pop()
+            continue
+        if type(item) is str:
+            if any(0xD800 <= ord(character) <= 0xDFFF for character in item):
+                _reject("invalid-unicode-scalar", "/")
+        elif type(item) is dict:
+            stack.append(iter(item))
+            stack.append(iter(item.values()))
+        elif type(item) is list:
+            stack.append(iter(item))
+
+
 def decode_event_graph_json(raw: bytes) -> Any:
     """Decode one raw graph through the duplicate-key-safe JSON boundary."""
 
@@ -327,7 +345,7 @@ def decode_event_graph_json(raw: bytes) -> Any:
     if projected_bytes > MAX_JSON_PARSER_BYTES:
         _reject("json-resource-limit", "/")
     try:
-        return json.loads(
+        value = json.loads(
             text,
             object_pairs_hook=_decoded_object,
             parse_float=_invalid_json_number,
@@ -340,7 +358,8 @@ def decode_event_graph_json(raw: bytes) -> Any:
         _reject("json-too-deep", "/")
     except json.JSONDecodeError:
         _reject("invalid-json", "/")
-    raise AssertionError("unreachable")
+    _reject_invalid_unicode_scalars(value)
+    return value
 
 
 def _object(value: Any, fields: Set[str], pointer: str) -> Dict[str, Any]:

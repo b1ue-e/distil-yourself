@@ -56,7 +56,11 @@ python3 knowledge-distiller/scripts/kd.py transition \
   --facts '{"has_seed":true}'
 ```
 
-Successful commands emit structured JSON on stdout. Invalid input exits with code `2`; a rejected artifact or transition exits with code `3` and emits structured JSON on stderr.
+Successful commands emit structured JSON on stdout. Input-boundary failures,
+including encoding, JSON, resource-limit, and unsafe-source errors, exit with
+code `2`. Duplicate JSON keys, canonical event-graph contract rejections,
+rejected artifacts, and rejected transitions exit with code `3` and emit
+structured JSON on stderr.
 
 Create, advance, inspect, or recover a durable local task:
 

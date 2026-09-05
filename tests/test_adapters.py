@@ -91,6 +91,32 @@ class CanonicalGraphTest(unittest.TestCase):
                     adapters.decode_event_graph_json(raw)
                 self.assertEqual(raised.exception.code, code)
 
+    def test_strict_json_decoder_rejects_lone_unicode_surrogates(self) -> None:
+        cases = (
+            b'"\\ud800"',
+            b'"\\udc00"',
+            b'{"\\ud800":0}',
+            b'{"\\udc00":0}',
+            b'["\\ud800"]',
+            b'["\\udc00"]',
+        )
+
+        for raw in cases:
+            with self.subTest(raw=raw):
+                with self.assertRaises(GraphValidationError) as raised:
+                    adapters.decode_event_graph_json(raw)
+                self.assertEqual(raised.exception.code, "invalid-unicode-scalar")
+
+    def test_strict_json_decoder_accepts_valid_unicode_scalars(self) -> None:
+        self.assertEqual(
+            adapters.decode_event_graph_json(b'"\\ud83d\\ude00"'),
+            "😀",
+        )
+        self.assertEqual(
+            adapters.decode_event_graph_json('"中文"'.encode("utf-8")),
+            "中文",
+        )
+
     def test_json_preflight_rejects_value_amplification_before_materialization(self) -> None:
         value_limit = adapters.MAX_JSON_VALUE_TOKENS
         raw = b"[" + (b"0," * value_limit) + b"0]"

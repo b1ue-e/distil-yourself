@@ -163,6 +163,23 @@ class CliTest(unittest.TestCase):
                 )
                 self.assertEqual(result.stdout, "")
 
+    def test_validate_event_graph_maps_lone_surrogate_to_exit_two_without_leaking_content(self) -> None:
+        secret = "PRIVATE-SOURCE-CONTENT"
+        with tempfile.TemporaryDirectory() as directory:
+            graph = Path(directory).resolve() / (secret + ".json")
+            graph.write_bytes(b'{"' + secret.encode("ascii") + b'":"\\ud800"}')
+
+            result = self.run_cli(*self.event_graph_arguments(graph))
+
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(
+            json.loads(result.stderr)["error"],
+            {"code": "invalid-input", "reason": "invalid-unicode-scalar"},
+        )
+        self.assertEqual(result.stdout, "")
+        self.assertNotIn(secret, result.stderr)
+        self.assertNotIn(str(graph), result.stderr)
+
     def test_validate_event_graph_maps_duplicate_and_contract_errors_to_exit_three(self) -> None:
         fixture = ROOT / "tests" / "fixtures" / "adapters" / "minimal-valid.json"
         semantic_graph = json.loads(fixture.read_text(encoding="utf-8"))

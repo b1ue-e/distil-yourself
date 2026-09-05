@@ -255,6 +255,7 @@ def _validate_event_graph(
         if error.code in {
             "invalid-utf8",
             "invalid-json",
+            "invalid-unicode-scalar",
             "json-resource-limit",
             "json-too-deep",
         }:
