@@ -4,11 +4,9 @@
 import argparse
 from dataclasses import asdict, fields
 import json
-import os
 from pathlib import Path
-import stat
 import sys
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Optional, Sequence
 
 from knowledge_distiller.adapters import (
     MAX_GRAPH_BYTES,
@@ -19,6 +17,7 @@ from knowledge_distiller.adapters import (
     validate_validation_context,
 )
 from knowledge_distiller.artifacts import DraftValidationError, validate_draft
+from knowledge_distiller import source_io
 from knowledge_distiller.persistence import (
     TaskBusyError,
     TaskPersistenceError,
@@ -132,107 +131,11 @@ def _snapshot_payload(snapshot: TaskSnapshot) -> Dict[str, Any]:
     }
 
 
-def _event_graph_path(path: str) -> Tuple[str, List[str]]:
-    if type(path) is not str or not path:
-        raise CliInputError("unsafe-source-file")
-    absolute = path.startswith(os.sep)
-    raw_components = path.split(os.sep)[1:] if absolute else path.split(os.sep)
-    if raw_components[-1] in {"", ".", ".."}:
-        raise CliInputError("unsafe-source-file")
-    components = [part for part in raw_components if part not in {"", "."}]
-    return (os.sep if absolute else "."), components
-
-
-def _open_event_graph(path: str) -> int:
-    if not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY"):
-        raise CliInputError("unsafe-source-file")
-    root, components = _event_graph_path(path)
-    directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
-    directory_flags |= getattr(os, "O_CLOEXEC", 0)
-    try:
-        directory = os.open(root, directory_flags)
-    except FileNotFoundError:
-        raise CliInputError("source-file-unavailable")
-    except (OSError, TypeError, ValueError):
-        raise CliInputError("unsafe-source-file")
-
-    descriptor = None
-    try:
-        for component in components[:-1]:
-            try:
-                child = os.open(component, directory_flags, dir_fd=directory)
-            except FileNotFoundError:
-                raise CliInputError("source-file-unavailable")
-            except (OSError, TypeError, ValueError):
-                raise CliInputError("unsafe-source-file")
-            os.close(directory)
-            directory = child
-
-        file_flags = os.O_RDONLY | os.O_NOFOLLOW
-        file_flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NONBLOCK", 0)
-        try:
-            descriptor = os.open(components[-1], file_flags, dir_fd=directory)
-        except FileNotFoundError:
-            raise CliInputError("source-file-unavailable")
-        except (OSError, TypeError, ValueError):
-            raise CliInputError("unsafe-source-file")
-        return descriptor
-    finally:
-        try:
-            os.close(directory)
-        except OSError:
-            if descriptor is not None:
-                os.close(descriptor)
-            raise CliInputError("unsafe-source-file")
-
-
 def _read_event_graph(path: str) -> bytes:
-    descriptor = _open_event_graph(path)
     try:
-        try:
-            metadata = os.fstat(descriptor)
-        except OSError:
-            raise CliInputError("unsafe-source-file")
-        if not stat.S_ISREG(metadata.st_mode):
-            raise CliInputError("unsafe-source-file")
-        if metadata.st_size > MAX_GRAPH_BYTES:
-            raise CliInputError("source-file-too-large")
-        if metadata.st_nlink != 1:
-            raise CliInputError("unsafe-source-file")
-        if (
-            metadata.st_size > 0
-            and hasattr(metadata, "st_blocks")
-            and metadata.st_blocks * 512 < metadata.st_size
-        ):
-            raise CliInputError("unsafe-source-file")
-
-        content = bytearray()
-        while len(content) <= MAX_GRAPH_BYTES:
-            try:
-                chunk = os.read(
-                    descriptor,
-                    min(1024 * 1024, MAX_GRAPH_BYTES + 1 - len(content)),
-                )
-            except OSError:
-                raise CliInputError("source-file-unavailable")
-            if not chunk:
-                break
-            content.extend(chunk)
-        if len(content) > MAX_GRAPH_BYTES:
-            raise CliInputError("source-file-too-large")
-        try:
-            current = os.fstat(descriptor)
-        except OSError:
-            raise CliInputError("input-changed")
-        identity_fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
-        if len(content) != metadata.st_size or any(
-            getattr(current, field) != getattr(metadata, field)
-            for field in identity_fields
-        ):
-            raise CliInputError("input-changed")
-        return bytes(content)
-    finally:
-        os.close(descriptor)
+        return source_io.read_source(path, max_bytes=MAX_GRAPH_BYTES)
+    except source_io.SourceIOError as error:
+        raise CliInputError(error.code) from None
 
 
 def _validate_event_graph(

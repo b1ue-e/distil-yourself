@@ -18,10 +18,20 @@ sys.path.insert(0, str(ROOT / "knowledge-distiller" / "scripts"))
 
 import kd as kd_cli  # noqa: E402
 from knowledge_distiller import adapters  # noqa: E402
+from knowledge_distiller import source_io  # noqa: E402
 from knowledge_distiller.persistence import TaskCoordinator, create_task  # noqa: E402
 
 
 class CliTest(unittest.TestCase):
+    def test_event_graph_delegates_to_shared_source_boundary(self) -> None:
+        with mock.patch.object(source_io, "read_source", return_value=b"{}") as reader:
+            self.assertEqual(kd_cli._read_event_graph("exact.json"), b"{}")
+        reader.assert_called_once_with("exact.json", max_bytes=adapters.MAX_GRAPH_BYTES)
+        with mock.patch.object(source_io, "read_source", side_effect=source_io.SourceIOError("input-changed")):
+            with self.assertRaises(kd_cli.CliInputError) as caught:
+                kd_cli._read_event_graph("exact.json")
+        self.assertEqual(caught.exception.reason, "input-changed")
+
     def run_cli(self, *arguments: str) -> subprocess.CompletedProcess:
         return subprocess.run(
             [sys.executable, str(CLI), *arguments],
@@ -306,8 +316,8 @@ class CliTest(unittest.TestCase):
             after = self.event_graph_metadata(metadata, st_size=3)
 
             with mock.patch.object(
-                kd_cli.os, "fstat", side_effect=(before, after)
-            ), mock.patch.object(kd_cli.os, "read", side_effect=(b"{} ", b"")):
+                source_io.os, "fstat", side_effect=(before, after)
+            ), mock.patch.object(source_io.os, "read", side_effect=(b"{} ", b"")):
                 with self.assertRaises(kd_cli.CliInputError) as raised:
                     kd_cli._read_event_graph(str(graph))
 
@@ -322,8 +332,8 @@ class CliTest(unittest.TestCase):
             after = self.event_graph_metadata(metadata, st_size=2)
 
             with mock.patch.object(
-                kd_cli.os, "fstat", side_effect=(before, after)
-            ), mock.patch.object(kd_cli.os, "read", side_effect=(b"{}", b"")):
+                source_io.os, "fstat", side_effect=(before, after)
+            ), mock.patch.object(source_io.os, "read", side_effect=(b"{}", b"")):
                 with self.assertRaises(kd_cli.CliInputError) as raised:
                     kd_cli._read_event_graph(str(graph))
 
@@ -342,8 +352,8 @@ class CliTest(unittest.TestCase):
             )
 
             with mock.patch.object(
-                kd_cli.os, "fstat", side_effect=(before, after)
-            ), mock.patch.object(kd_cli.os, "read", side_effect=(b"[]", b"")):
+                source_io.os, "fstat", side_effect=(before, after)
+            ), mock.patch.object(source_io.os, "read", side_effect=(b"[]", b"")):
                 with self.assertRaises(kd_cli.CliInputError) as raised:
                     kd_cli._read_event_graph(str(graph))
 
@@ -385,7 +395,7 @@ class CliTest(unittest.TestCase):
                     mutated = True
                 return chunk
 
-            with mock.patch.object(kd_cli.os, "read", side_effect=read_then_mutate):
+            with mock.patch.object(source_io.os, "read", side_effect=read_then_mutate):
                 with self.assertRaises(kd_cli.CliInputError) as raised:
                     kd_cli._read_event_graph(str(graph))
 
@@ -445,8 +455,8 @@ class CliTest(unittest.TestCase):
                         st_blocks=0,
                     )
                     with mock.patch.object(
-                        kd_cli.os, "fstat", return_value=sparse
-                    ), mock.patch.object(kd_cli.os, "read", return_value=b"") as read:
+                        source_io.os, "fstat", return_value=sparse
+                    ), mock.patch.object(source_io.os, "read", return_value=b"") as read:
                         with self.assertRaises(kd_cli.CliInputError) as raised:
                             kd_cli._read_event_graph(str(graph))
 
