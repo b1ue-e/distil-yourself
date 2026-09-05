@@ -139,7 +139,11 @@ python3 knowledge-distiller/scripts/kd.py validate-event-graph GRAPH.json \
 
 下一实施计划已确定为 [core dual-source loop](../plans/2026-09-05-knowledge-distiller-core-dual-source-loop.md)：优先打通一个精确授权的 Lark 云文档与一个精确授权的 Codex 本地 CLI 会话，贯穿授权、只读 broker、版本化 normalization、确定性脱敏、evidence/provenance、critical-question policy 和非可执行 skill draft 编译。Claude Code 与 Trae 在该核心纵向闭环完成后复用同一契约补齐。
 
-该计划目前仅完成设计与任务拆分，所有 checkbox 均未开始；尚未读取真实来源，也尚未把任何 native adapter 从 `blocked` 改为 `supported`。Lark 与 Codex 的真实 fixture 捕获分别设有精确 selector、revision/range、ContentGrant 与 AuthorityAttestation 审批门。计划的最终评审包含独立的代码精简与冗余检查。
+该计划的 Task 1 已完成：新增严格、不可变、纯验证的 `ContentGrant`、`AuthorityAttestation`、`AuthorizationContext`、`CanonicalDocument` 与 `SourceSnapshotManifest` 合约；session snapshot 复用既有 `EventGraphManifest` validator，没有复制或放宽事件图契约。snapshot ID 与 raw digest 均绑定原始 bytes 的 SHA-256；exact bounds 拒绝 Unicode control/format/line/paragraph separator；document 在 normalization 前执行 block、item、depth 与 canonical UTF-8 byte preflight。
+
+Task 1 遵循 TDD，定向测试从 19 项增至 28 项；主进程最新完整回归为 194/194 通过。独立规格复审为 `SPEC PASS`，独立质量复审为 `READY`，Critical、Important、Minor 均无遗留；精简与冗余审查未发现应删除的生产逻辑。实现提交为 `0d95a95`、测试边界补强为 `2004a7a`、质量修复为 `9cd02bc`。
+
+尚未读取真实来源，也尚未把任何 native adapter 从 `blocked` 改为 `supported`。Lark 与 Codex 的真实 fixture 捕获分别设有精确 selector、revision/range、ContentGrant 与 AuthorityAttestation 审批门。下一个实现项为 Task 2：私有 grants、snapshots、evidence 与 provenance 的安全持久化。
 
 ### 产品里程碑
 

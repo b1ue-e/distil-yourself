@@ -39,21 +39,21 @@ The first native session target is Codex because it exercises the local CLI-sess
 - Create: `tests/test_sources.py`
 - Modify: `knowledge-distiller/references/authorization.md`
 
-- [ ] **Step 1: Write failing authorization-record tests**
+- [x] **Step 1: Write failing authorization-record tests**
 
   Cover strict closed schemas for `ContentGrant` and `AuthorityAttestation`: immutable record ID, task ID, issuer and active principal, tenant/account, exact selector, allowed operation, purpose, revision or session range, issue/expiry times, derived-processing bound, decision digest, and revocation state. Reject unknown fields, wildcard or empty selectors, `latest`, expired/revoked records, principal/tenant/purpose mismatch, a self-attestation for third-party content, and a grant that attempts discovery or mutation.
 
-- [ ] **Step 2: Run authorization tests red**
+- [x] **Step 2: Run authorization tests red**
 
   Run: `python3 -m unittest tests.test_authorization -v`
 
   Expected: FAIL because the typed records and validators do not exist.
 
-- [ ] **Step 3: Implement the minimal authorization validators**
+- [x] **Step 3: Implement the minimal authorization validators**
 
   Use frozen dataclasses and canonical SHA-256 digests. Return bounded error codes without selectors or source text. Keep grant validation pure; technical credential checks belong to the broker.
 
-- [ ] **Step 4: Write failing canonical-source tests**
+- [x] **Step 4: Write failing canonical-source tests**
 
   Define a shared `SourceSnapshotManifest`, plus two distinct payloads:
 
@@ -62,7 +62,7 @@ The first native session target is Codex because it exercises the local CLI-sess
 
   Require immutable snapshot IDs, adapter/product/native-schema versions, owner binding, raw/canonical digests, source byte and item counts, and explicit fidelity losses. Reject unknown fields and any document claim eligibility that is not backed by deterministic owner resolution.
 
-- [ ] **Step 5: Implement the contracts and run tests green**
+- [x] **Step 5: Implement the contracts and run tests green**
 
   Run: `python3 -m unittest tests.test_authorization tests.test_sources -v`
 
