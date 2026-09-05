@@ -127,21 +127,21 @@ Expected: PASS.
 - Modify: `README.md`
 - Modify: `tests/test_skill_contract.py`
 
-- [ ] **Step 1: Extend the failing skill contract**
+- [x] **Step 1: Extend the failing skill contract**
 
 Require `adapter-contract.md`, `adapter-compatibility.md`, and `validate-event-graph`; require explicit language that validation does not authorize a source read or make a native adapter supported.
 
-- [ ] **Step 2: Run the contract test red**
+- [x] **Step 2: Run the contract test red**
 
 Run: `python3 -m unittest tests.test_skill_contract -v`
 
 Expected: FAIL until public guidance includes the new bounded capability.
 
-- [ ] **Step 3: Update progressive-disclosure guidance**
+- [x] **Step 3: Update progressive-disclosure guidance**
 
 Route compatibility questions and canonical normalization through the new references and validator. Replace the blanket “source adapters not implemented” statement with the precise boundary: the contract and synthetic conformance harness exist, while all four native adapters remain blocked and unimplemented.
 
-- [ ] **Step 4: Run contract tests green**
+- [x] **Step 4: Run contract tests green**
 
 Run: `python3 -m unittest tests.test_skill_contract -v`
 
@@ -153,13 +153,13 @@ Expected: PASS.
 
 - Modify: `docs/plans/2026-09-04-knowledge-distiller-adapter-contract.md`
 
-- [ ] **Step 1: Run the complete suite**
+- [x] **Step 1: Run the complete suite**
 
 Run: `PYTHONDONTWRITEBYTECODE=1 python3 -W error::ResourceWarning -m unittest discover -s tests -v`
 
 Expected: all tests PASS without network access or source reads.
 
-- [ ] **Step 2: Run static and repository checks**
+- [x] **Step 2: Run static and repository checks**
 
 Run: `PYTHONPYCACHEPREFIX=/private/tmp/distil-yourself-pyc-adapters python3 -m compileall -q knowledge-distiller/scripts`
 
@@ -167,10 +167,10 @@ Run: `git diff --check`
 
 Expected: both exit 0 and no repository `__pycache__` directories exist.
 
-- [ ] **Step 3: Review fail-closed behavior**
+- [x] **Step 3: Review fail-closed behavior**
 
-Review schema strictness, causal invariants, error redaction, file-opening behavior, compatibility claims, and the absence of native reads. Fix every Critical or Important issue with a failing regression test first.
+Review schema strictness, causal invariants, error redaction, file-opening behavior, compatibility claims, the absence of native reads, and whether code/tests/docs can be simplified or contain duplicated or unused logic (`代码/测试/文档是否可精简、是否存在重复或无用逻辑`). Emit a separate simplification/redundancy verdict. Fix every Critical or Important issue with a failing regression test first.
 
-- [ ] **Step 4: Record completion and commit locally**
+- [x] **Step 4: Record completion and commit locally**
 
 Mark completed plan items and commit on `feat/implement_knowledge_distiller`. Do not push, merge, install, export, publish, inspect real sources, or change the wider environment.
