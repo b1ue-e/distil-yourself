@@ -42,7 +42,7 @@ The Foundation CLI has no caller-controlled asset allowlist, so it rejects every
 Validate a candidate canonical event graph against the listed synthetic adapter tuple and explicit trust anchors:
 
 ```bash
-python3 knowledge-distiller/scripts/kd.py validate-event-graph /absolute/path/to/graph.json --expected-owner-id OWNER_ID --expected-source-snapshot-id sha256:<64 lowercase hex>
+python3 knowledge-distiller/scripts/kd.py validate-event-graph /absolute/path/to/graph.json --expected-owner-id OWNER_ID --expected-source-snapshot-id sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 ```
 
 Successful event-graph validation proves only that the graph conforms to the listed synthetic tuple and canonical contract. It does not authorize a source read, does not authorize native tool invocation, and does not make any native adapter supported.

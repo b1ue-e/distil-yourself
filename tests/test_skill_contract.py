@@ -1,5 +1,6 @@
 import json
 import re
+import shlex
 import unittest
 from pathlib import Path
 
@@ -392,23 +393,43 @@ class SkillContractTest(unittest.TestCase):
     def test_public_guidance_routes_canonical_graphs_through_the_bounded_gate(self) -> None:
         guidance = {
             "SKILL.md": (
-                " ".join(self.skill_text().split()),
-                "python3 scripts/kd.py validate-event-graph /absolute/path/to/graph.json "
-                "--expected-owner-id OWNER_ID --expected-source-snapshot-id "
-                "sha256:<64 lowercase hex>",
+                self.skill_text(),
+                ["python3", "scripts/kd.py"],
             ),
             "README.md": (
-                " ".join(README_FILE.read_text(encoding="utf-8").split()),
-                "python3 knowledge-distiller/scripts/kd.py validate-event-graph "
-                "/absolute/path/to/graph.json --expected-owner-id OWNER_ID "
-                "--expected-source-snapshot-id sha256:<64 lowercase hex>",
+                README_FILE.read_text(encoding="utf-8"),
+                ["python3", "knowledge-distiller/scripts/kd.py"],
             ),
         }
-        for name, (text, command) in guidance.items():
+        snapshot_id = "sha256:" + "a" * 64
+        for name, (text, prefix) in guidance.items():
             with self.subTest(file=name):
                 self.assertIn("adapter-compatibility.md", text)
                 self.assertIn("adapter-contract.md", text)
-                self.assertIn(command, text)
+                commands = [
+                    line.strip()
+                    for line in text.splitlines()
+                    if line.strip().startswith("python3 ")
+                    and " validate-event-graph " in line
+                ]
+                self.assertEqual(len(commands), 1)
+                command = commands[0]
+                self.assertNotRegex(command, r"[<>]")
+                arguments = shlex.split(command)
+                self.assertEqual(
+                    arguments,
+                    prefix
+                    + [
+                        "validate-event-graph",
+                        "/absolute/path/to/graph.json",
+                        "--expected-owner-id",
+                        "OWNER_ID",
+                        "--expected-source-snapshot-id",
+                        snapshot_id,
+                    ],
+                )
+                snapshot_index = arguments.index("--expected-source-snapshot-id") + 1
+                self.assertRegex(arguments[snapshot_index], r"\Asha256:[0-9a-f]{64}\Z")
 
     def test_public_guidance_limits_what_event_graph_validation_proves(self) -> None:
         for name, path in (

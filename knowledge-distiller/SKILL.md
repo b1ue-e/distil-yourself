@@ -46,7 +46,7 @@ Run commands from the skill directory:
 
 ```bash
 python3 scripts/kd.py validate-draft /absolute/path/to/domain-skill
-python3 scripts/kd.py validate-event-graph /absolute/path/to/graph.json --expected-owner-id OWNER_ID --expected-source-snapshot-id sha256:<64 lowercase hex>
+python3 scripts/kd.py validate-event-graph /absolute/path/to/graph.json --expected-owner-id OWNER_ID --expected-source-snapshot-id sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 python3 scripts/kd.py task-init /absolute/path/to/task-workspace
 python3 scripts/kd.py task-inspect /absolute/path/to/task-workspace
 python3 scripts/kd.py task-transition /absolute/path/to/task-workspace --event start-discover --facts '{"has_seed":true}'
