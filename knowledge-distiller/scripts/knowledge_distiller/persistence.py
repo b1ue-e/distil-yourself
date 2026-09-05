@@ -45,6 +45,7 @@ _ROOT_ENTRIES = {
     _POINTER_NAME,
     _GENERATIONS_NAME,
     _QUARANTINE_NAME,
+    "raw-staging",
 }
 
 
@@ -78,6 +79,9 @@ class _Prepared:
     prior_state_digest: Optional[str]
     expected_state_digest: str
     fencing_epoch: int
+    artifact_manifest_digest: Optional[str] = None
+    event: str = ""
+    facts_digest: str = ""
 
 
 @dataclass(frozen=True)
@@ -378,7 +382,7 @@ def _transactions(
         if authority_epoch == 0 or record.fencing_epoch != authority_epoch:
             raise TaskPersistenceError("transaction-fencing-mismatch")
         if kind == "prepare":
-            if set(payload) != {
+            if set(payload) - {"artifact_manifest_digest"} != {
                 "kind",
                 "transaction_id",
                 "generation_id",
@@ -409,6 +413,12 @@ def _transactions(
                 prior_state_digest=prior_digest,
                 expected_state_digest=_require_digest(payload["expected_state_digest"]),
                 fencing_epoch=record.fencing_epoch,
+                artifact_manifest_digest=(
+                    _require_digest(payload["artifact_manifest_digest"])
+                    if "artifact_manifest_digest" in payload else None
+                ),
+                event=payload["event"],
+                facts_digest=payload["facts_digest"],
             )
             prepared[transaction_id] = item
             generation_ids.add(generation_id)
@@ -470,10 +480,18 @@ def _validate_generation(workspace: _Workspace, committed: _Committed) -> TaskSt
         workspace.generations_descriptor, committed.prepared.generation_id
     )
     try:
-        if set(os.listdir(descriptor)) != {"state.json", "manifest.json"}:
+        if (committed.prepared.artifact_manifest_digest is None
+                and set(os.listdir(descriptor)) != {"state.json", "manifest.json"}):
             raise TaskPersistenceError("generation-layout-invalid")
         state_bytes = _read_file_at(descriptor, "state.json", 1024 * 1024)
-        manifest_bytes = _read_file_at(descriptor, "manifest.json", 1024 * 1024)
+        manifest_bytes = _read_file_at(descriptor, "manifest.json", 16 * 1024 * 1024)
+        if committed.prepared.artifact_manifest_digest is not None:
+            from .private_store import manifest_digest, read_artifacts
+            private_manifest = _parse_json_object(manifest_bytes, "generation-manifest-invalid")
+            entries = private_manifest.get("artifacts")
+            if manifest_digest(entries) != committed.prepared.artifact_manifest_digest:
+                raise TaskPersistenceError("generation-digest-mismatch")
+            read_artifacts(descriptor, entries)
     finally:
         os.close(descriptor)
     if hashlib.sha256(state_bytes).hexdigest() != committed.state_digest:
@@ -481,7 +499,10 @@ def _validate_generation(workspace: _Workspace, committed: _Committed) -> TaskSt
     if hashlib.sha256(manifest_bytes).hexdigest() != committed.manifest_digest:
         raise TaskPersistenceError("generation-digest-mismatch")
     manifest = _parse_json_object(manifest_bytes, "generation-manifest-invalid")
-    if set(manifest) != {"schema_version", "generation_id", "files"}:
+    expected_fields = {"schema_version", "generation_id", "files"}
+    if committed.prepared.artifact_manifest_digest is not None:
+        expected_fields.add("artifacts")
+    if set(manifest) != expected_fields:
         raise TaskPersistenceError("generation-manifest-invalid")
     if (
         manifest["schema_version"] != 1
@@ -503,7 +524,7 @@ def _validate_generation(workspace: _Workspace, committed: _Committed) -> TaskSt
 
 
 def _write_generation(
-    workspace: _Workspace, generation_id: str, state: TaskState
+    workspace: _Workspace, generation_id: str, state: TaskState, artifacts=None
 ) -> Tuple[str, str]:
     try:
         os.mkdir(generation_id, 0o700, dir_fd=workspace.generations_descriptor)
@@ -524,9 +545,17 @@ def _write_generation(
                 }
             ],
         }
+        if artifacts is not None:
+            from .private_store import manifest_digest, write_artifacts
+            manifest["artifacts"] = [entry for entry, content in artifacts]
+            manifest_digest(manifest["artifacts"])
+            write_artifacts(descriptor, artifacts)
         manifest_bytes = canonical_json(manifest)
         _write_new_file_at(descriptor, "state.json", state_bytes)
         _write_new_file_at(descriptor, "manifest.json", manifest_bytes)
+        if artifacts is not None:
+            from .private_store import read_artifacts
+            read_artifacts(descriptor, manifest["artifacts"])
         _fsync_directory(descriptor)
     finally:
         os.close(descriptor)
@@ -609,6 +638,7 @@ class TaskCoordinator:
         self._lease_descriptor: Optional[int] = None
         self._fencing_epoch = 0
         self._snapshot: Optional[TaskSnapshot] = None
+        self._process_id = os.getpid()
 
     def __enter__(self) -> "TaskCoordinator":
         if self._workspace is None:
@@ -629,6 +659,8 @@ class TaskCoordinator:
             self._snapshot = _snapshot_from_records(
                 self._workspace, current.records, current.torn_tail, repair=True
             )
+            from .private_store import recover_staging
+            recover_staging(self._workspace.root_descriptor)
         except JournalError as error:
             self.__exit__(None, None, None)
             raise _raise_from_journal(error) from error
@@ -715,12 +747,88 @@ class TaskCoordinator:
             raise TaskPersistenceError("task-not-initialized")
         next_state = transition(self._snapshot.state, event, facts)
         facts_digest = hashlib.sha256(canonical_json(facts_to_dict(facts))).hexdigest()
-        return self._commit(next_state, event.value, facts_digest)
+        return self._commit(next_state, event.value, facts_digest, self._current_artifacts())
 
-    def _commit(self, state: TaskState, event: str, facts_digest: str) -> TaskSnapshot:
+    def _assert_writer(self) -> None:
+        if (self._workspace is None or self._lease_descriptor is None
+                or self._process_id != os.getpid()):
+            raise TaskPersistenceError("lease-not-held")
+        try:
+            scan = self._workspace.journal().scan()
+        except JournalError as error:
+            raise _raise_from_journal(error) from error
+        if (scan.torn_tail or not scan.records
+                or scan.records[-1].fencing_epoch != self._fencing_epoch):
+            raise TaskPersistenceError("transaction-fencing-mismatch")
+        committed, unused = _transactions(scan.records)
+        latest = committed[-1].prepared.generation_id if committed else None
+        if latest != (self._snapshot.generation_id if self._snapshot else None):
+            raise TaskPersistenceError("generation-lineage-mismatch")
+
+    def artifact_transaction(self, transaction_id: str, expected_generation_id: str):
+        """Stage a complete private snapshot bound to an explicit input generation."""
+        self._assert_writer()
+        from .private_store import ArtifactTransaction
+        return ArtifactTransaction(self, transaction_id, expected_generation_id)
+
+    def _current_artifacts(self):
+        self._assert_writer()
+        if self._snapshot is None:
+            return None
+        committed, unused = _transactions(self._workspace.journal().scan().records)
+        _validate_generation(self._workspace, committed[-1])
+        descriptor = _open_directory_at(self._workspace.generations_descriptor, self._snapshot.generation_id)
+        try:
+            manifest = _parse_json_object(
+                _read_file_at(descriptor, "manifest.json", 16 * 1024 * 1024),
+                "generation-manifest-invalid",
+            )
+            if "artifacts" not in manifest:
+                return None
+            from .private_store import read_artifacts
+            return read_artifacts(descriptor, manifest["artifacts"])
+        finally:
+            os.close(descriptor)
+
+    def _commit_artifacts(self, transaction, event, facts, artifacts):
+        from .private_store import manifest_digest
+        self._assert_writer()
+        digest = manifest_digest([entry for entry, content in artifacts])
+        facts_digest = hashlib.sha256(canonical_json(facts_to_dict(facts))).hexdigest()
+        committed, pending = _transactions(self._workspace.journal().scan().records)
+        if committed:
+            _validate_generation(self._workspace, committed[-1])
+        for item in committed:
+            if item.prepared.transaction_id != transaction.transaction_id:
+                continue
+            prepared = item.prepared
+            if (item != committed[-1]
+                    or prepared.prior_generation_id != transaction.expected_generation_id
+                    or prepared.artifact_manifest_digest != digest
+                    or prepared.event != event.value or prepared.facts_digest != facts_digest):
+                raise TaskPersistenceError("private-replay-mismatch")
+            prior = next((record for record in committed
+                          if record.prepared.generation_id == prepared.prior_generation_id), None)
+            if prior is None:
+                raise TaskPersistenceError("private-replay-mismatch")
+            state = transition(_validate_generation(self._workspace, prior), event, facts)
+            if hashlib.sha256(canonical_json(state_to_dict(state))).hexdigest() != item.state_digest:
+                raise TaskPersistenceError("private-replay-mismatch")
+            _validate_generation(self._workspace, item)
+            return self._snapshot
+        if transaction.transaction_id in pending:
+            raise TaskPersistenceError("private-replay-pending")
+        if self._snapshot is None or transaction.expected_generation_id != self._snapshot.generation_id:
+            raise TaskPersistenceError("generation-lineage-mismatch")
+        state = transition(self._snapshot.state, event, facts)
+        return self._commit(state, event.value, facts_digest, artifacts, transaction.transaction_id)
+
+    def _commit(self, state: TaskState, event: str, facts_digest: str,
+                artifacts=None, transaction_id=None) -> TaskSnapshot:
         if self._workspace is None:
             raise TaskPersistenceError("workspace-not-open")
-        transaction_id = "t-" + uuid.uuid4().hex
+        self._assert_writer()
+        transaction_id = transaction_id or "t-" + uuid.uuid4().hex
         generation_id = "g-" + uuid.uuid4().hex
         state_digest = hashlib.sha256(canonical_json(state_to_dict(state))).hexdigest()
         prior_generation = self._snapshot.generation_id if self._snapshot else None
@@ -731,24 +839,33 @@ class TaskCoordinator:
         )
         journal = self._workspace.journal()
         try:
-            journal.append(
-                {
-                    "kind": "prepare",
-                    "transaction_id": transaction_id,
-                    "generation_id": generation_id,
-                    "prior_generation_id": prior_generation,
-                    "prior_state_digest": prior_state_digest,
-                    "expected_state_digest": state_digest,
-                    "event": event,
-                    "facts_digest": facts_digest,
-                },
-                self._fencing_epoch,
-            )
+            prepare = {
+                "kind": "prepare",
+                "transaction_id": transaction_id,
+                "generation_id": generation_id,
+                "prior_generation_id": prior_generation,
+                "prior_state_digest": prior_state_digest,
+                "expected_state_digest": state_digest,
+                "event": event,
+                "facts_digest": facts_digest,
+            }
+            if artifacts is not None:
+                from .private_store import manifest_digest
+                prepare["artifact_manifest_digest"] = manifest_digest([entry for entry, content in artifacts])
+            journal.append(prepare, self._fencing_epoch)
             written_state_digest, manifest_digest = _write_generation(
-                self._workspace, generation_id, state
+                self._workspace, generation_id, state, artifacts
             )
             if written_state_digest != state_digest:
                 raise TaskPersistenceError("generation-digest-mismatch")
+            if artifacts is not None:
+                prepared = _Prepared(
+                    transaction_id, generation_id, prior_generation, prior_state_digest,
+                    state_digest, self._fencing_epoch, prepare["artifact_manifest_digest"],
+                    event, facts_digest,
+                )
+                _validate_generation(self._workspace, _Committed(prepared, manifest_digest, state_digest, 0))
+            self._assert_writer()
             journal.append(
                 {
                     "kind": "commit",

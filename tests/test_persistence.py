@@ -45,6 +45,41 @@ def _frame_boundaries(path: Path):
 
 
 class PersistenceTest(unittest.TestCase):
+    def test_private_generation_is_revalidated_before_commit(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "task"
+            initial = create_task(root)
+            self.assertTrue(callable(getattr(TaskCoordinator, "artifact_transaction", None)))
+            original = persistence_module._write_generation
+            def substitute_after_write(workspace, generation_id, state, artifacts=None):
+                result = original(workspace, generation_id, state, artifacts)
+                path = root / "generations" / generation_id / "sources/x"
+                path.write_bytes(b"substituted")
+                return result
+            with TaskCoordinator(root) as coordinator:
+                with coordinator.artifact_transaction("private-test", initial.generation_id) as transaction:
+                    transaction.add("sources/x", b"synthetic")
+                    with mock.patch.object(persistence_module, "_write_generation", side_effect=substitute_after_write):
+                        with self.assertRaises(TaskPersistenceError):
+                            transaction.commit(Event.START_DISCOVER, TransitionFacts(has_seed=True))
+            commits = [record for record in Journal(root / "event-log.frames").scan().records
+                       if record.payload["kind"] == "commit"]
+            self.assertEqual(len(commits), 1)
+
+    def test_private_manifest_is_verified_against_commit_before_carry_forward(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "task"
+            initial = create_task(root)
+            self.assertTrue(callable(getattr(TaskCoordinator, "artifact_transaction", None)))
+            with TaskCoordinator(root) as coordinator:
+                with coordinator.artifact_transaction("private-test", initial.generation_id) as transaction:
+                    transaction.add("sources/x", b"synthetic")
+                    snapshot = transaction.commit(Event.START_DISCOVER, TransitionFacts(has_seed=True))
+                manifest = root / "generations" / snapshot.generation_id / "manifest.json"
+                manifest.write_bytes(manifest.read_bytes().replace(b'"schema_version":1', b'"schema_version":2'))
+                with self.assertRaises(TaskPersistenceError):
+                    coordinator.transition(Event.CANCEL, TransitionFacts())
+
     def test_create_and_transition_persist_inspectable_state(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "task"
