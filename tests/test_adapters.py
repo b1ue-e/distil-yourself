@@ -92,7 +92,7 @@ class CanonicalGraphTest(unittest.TestCase):
                 self.assertEqual(raised.exception.code, code)
 
     def test_json_preflight_rejects_value_amplification_before_materialization(self) -> None:
-        value_limit = getattr(adapters, "MAX_JSON_VALUE_TOKENS", 250_000)
+        value_limit = adapters.MAX_JSON_VALUE_TOKENS
         raw = b"[" + (b"0," * value_limit) + b"0]"
         self.assertLess(len(raw), adapters.MAX_GRAPH_BYTES)
 
@@ -100,6 +100,22 @@ class CanonicalGraphTest(unittest.TestCase):
             adapters.decode_event_graph_json(raw)
 
         self.assertEqual(raised.exception.code, "json-resource-limit")
+
+    def test_json_preflight_rejects_structural_and_string_limits_before_materialization(self) -> None:
+        cases = (
+            ("MAX_JSON_STRUCTURAL_TOKENS", b"[]"),
+            ("MAX_JSON_STRING_TOKENS", b'["a","b"]'),
+        )
+        for limit, raw in cases:
+            with self.subTest(limit=limit), mock.patch.object(
+                adapters, limit, 1
+            ), mock.patch.object(
+                adapters.json, "loads", wraps=adapters.json.loads
+            ) as loads, self.assertRaises(GraphValidationError) as raised:
+                adapters.decode_event_graph_json(raw)
+
+            self.assertEqual(raised.exception.code, "json-resource-limit")
+            loads.assert_not_called()
 
     def test_json_memory_budget_rejects_wide_string_before_materialization(self) -> None:
         raw = b'"' + (b"a" * 120) + "😀".encode("utf-8") + b'"'
@@ -116,7 +132,6 @@ class CanonicalGraphTest(unittest.TestCase):
         loads.assert_not_called()
 
     def test_json_preflight_ignores_escaped_string_punctuation(self) -> None:
-        self.assertTrue(hasattr(adapters, "_preflight_event_graph_json"))
         raw = b"[\"{[,:]}\",\"escaped quote: \\\"\"]"
         self.assertEqual(adapters._preflight_event_graph_json(raw), 5)
         limits = (

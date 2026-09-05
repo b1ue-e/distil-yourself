@@ -189,7 +189,7 @@ class CliTest(unittest.TestCase):
                 self.assertEqual(result.stdout, "")
 
     def test_validate_event_graph_maps_json_amplification_to_exit_two(self) -> None:
-        value_limit = getattr(adapters, "MAX_JSON_VALUE_TOKENS", 250_000)
+        value_limit = adapters.MAX_JSON_VALUE_TOKENS
         content = b"[" + (b"0," * value_limit) + b"0]"
         self.assertLess(len(content), adapters.MAX_GRAPH_BYTES)
         with tempfile.TemporaryDirectory() as directory:
@@ -332,6 +332,49 @@ class CliTest(unittest.TestCase):
 
         self.assertEqual(raised.exception.reason, "input-changed")
 
+    def test_validate_event_graph_detects_real_same_size_mutation_during_read(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            graph = Path(directory).resolve() / "graph.json"
+            graph.write_bytes(b"{}")
+            initial = graph.stat()
+            real_read = os.read
+            mutated = False
+
+            def read_then_mutate(descriptor: int, size: int) -> bytes:
+                nonlocal mutated
+                chunk = real_read(descriptor, size)
+                if chunk and not mutated:
+                    with graph.open("r+b") as writer:
+                        writer.write(b"[]")
+                        writer.flush()
+                        os.fsync(writer.fileno())
+                    current = graph.stat()
+                    self.assertEqual(current.st_ino, initial.st_ino)
+                    self.assertEqual(current.st_size, initial.st_size)
+                    if current.st_mtime_ns == initial.st_mtime_ns:
+                        try:
+                            os.utime(
+                                graph,
+                                ns=(
+                                    current.st_atime_ns,
+                                    initial.st_mtime_ns + 1_000_000_000,
+                                ),
+                            )
+                        except (AttributeError, NotImplementedError, OSError):
+                            self.skipTest("filesystem cannot force a distinct mtime")
+                        current = graph.stat()
+                    if current.st_mtime_ns == initial.st_mtime_ns:
+                        self.skipTest("filesystem mtime resolution is insufficient")
+                    mutated = True
+                return chunk
+
+            with mock.patch.object(kd_cli.os, "read", side_effect=read_then_mutate):
+                with self.assertRaises(kd_cli.CliInputError) as raised:
+                    kd_cli._read_event_graph(str(graph))
+
+        self.assertTrue(mutated)
+        self.assertEqual(raised.exception.reason, "input-changed")
+
     def test_validate_event_graph_rejects_symlinked_ancestor(self) -> None:
         fixture = ROOT / "tests" / "fixtures" / "adapters" / "minimal-valid.json"
         with tempfile.TemporaryDirectory() as directory:
@@ -427,6 +470,19 @@ class CliTest(unittest.TestCase):
             finally:
                 if listener is not None:
                     listener.close()
+
+    def test_validate_event_graph_rejects_character_device(self) -> None:
+        device = Path("/dev/null")
+        if not device.exists():
+            self.skipTest("platform has no /dev/null")
+
+        result = self.run_cli(*self.event_graph_arguments(device))
+
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(
+            json.loads(result.stderr)["error"],
+            {"code": "invalid-input", "reason": "unsafe-source-file"},
+        )
 
     def test_validate_event_graph_accepts_equivalent_explicit_alias_paths(self) -> None:
         fixture = ROOT / "tests" / "fixtures" / "adapters" / "minimal-valid.json"
