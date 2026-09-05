@@ -664,7 +664,7 @@ class TaskCoordinator:
         except JournalError as error:
             self.__exit__(None, None, None)
             raise _raise_from_journal(error) from error
-        except Exception:
+        except BaseException:
             self.__exit__(None, None, None)
             raise
         return self

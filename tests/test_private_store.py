@@ -24,8 +24,6 @@ class PrivateStoreTest(unittest.TestCase):
         self.initial = create_task(self.root)
 
     def transaction(self, coordinator, transaction_id="private-1", prior=None):
-        self.assertTrue(callable(getattr(coordinator, "artifact_transaction", None)),
-                        "TaskCoordinator must expose the private artifact transaction")
         return coordinator.artifact_transaction(transaction_id, prior or self.initial.generation_id)
 
     def commit(self, payload=b"synthetic-private-selector-excerpt", transaction_id="private-1"):
@@ -80,6 +78,31 @@ class PrivateStoreTest(unittest.TestCase):
                         with self.assertRaises(TaskPersistenceError):
                             transaction.add("sources/x", b"x")
         self.assertFalse(self.staging_files())
+
+    def test_private_parent_translates_os_errors_and_closes_descriptors(self):
+        from knowledge_distiller import private_store
+        root = os.open(self.root, os.O_RDONLY)
+        self.addCleanup(os.close, root)
+        with mock.patch("os.dup", side_effect=OSError("synthetic-private-dup")):
+            with self.assertRaises(TaskPersistenceError) as caught:
+                private_store._parent(root, ["sources"])
+        self.assertEqual(str(caught.exception), "private-artifact-invalid")
+        original_dup = os.dup
+        for target, kwargs in (("os.mkdir", {"create": True}),
+                               ("knowledge_distiller.private_store._private_directory", {})):
+            duplicated = []
+            def duplicate(descriptor):
+                copy = original_dup(descriptor)
+                duplicated.append(copy)
+                return copy
+            with mock.patch("os.dup", side_effect=duplicate), mock.patch(target, side_effect=OSError("synthetic-private-io")):
+                with self.assertRaises(TaskPersistenceError) as caught:
+                    private_store._parent(root, ["sources"], **kwargs)
+            self.assertEqual(str(caught.exception), "private-artifact-invalid")
+            self.assertEqual(len(duplicated), 1)
+            with self.assertRaises(OSError):
+                os.fstat(duplicated[0])
+        os.fstat(root)
 
     def test_all_declared_roots_and_nested_paths_are_supported(self):
         with TaskCoordinator(self.root) as coordinator:

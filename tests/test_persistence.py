@@ -49,7 +49,6 @@ class PersistenceTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "task"
             initial = create_task(root)
-            self.assertTrue(callable(getattr(TaskCoordinator, "artifact_transaction", None)))
             original = persistence_module._write_generation
             def substitute_after_write(workspace, generation_id, state, artifacts=None):
                 result = original(workspace, generation_id, state, artifacts)
@@ -70,7 +69,6 @@ class PersistenceTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "task"
             initial = create_task(root)
-            self.assertTrue(callable(getattr(TaskCoordinator, "artifact_transaction", None)))
             with TaskCoordinator(root) as coordinator:
                 with coordinator.artifact_transaction("private-test", initial.generation_id) as transaction:
                     transaction.add("sources/x", b"synthetic")
@@ -120,6 +118,20 @@ class PersistenceTest(unittest.TestCase):
                     recover_task(root)
 
             self.assertEqual(caught.exception.code, "task-busy")
+
+    def test_cancelled_staging_recovery_releases_writer_resources(self) -> None:
+        from knowledge_distiller import private_store
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "task"
+            snapshot = create_task(root)
+            cancelled = TaskCoordinator(root)
+            with mock.patch.object(private_store, "recover_staging", side_effect=KeyboardInterrupt):
+                with self.assertRaises(KeyboardInterrupt):
+                    cancelled.__enter__()
+            self.assertIsNone(cancelled._lease_descriptor)
+            self.assertIsNone(cancelled._workspace)
+            with TaskCoordinator(root) as coordinator:
+                self.assertEqual(coordinator.snapshot.generation_id, snapshot.generation_id)
 
     def test_workspace_uses_owner_only_permissions(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

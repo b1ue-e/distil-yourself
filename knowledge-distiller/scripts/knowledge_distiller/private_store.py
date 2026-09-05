@@ -145,8 +145,9 @@ def _private_directory(parent, name):
 
 
 def _parent(root, parts, create=False):
-    descriptor = os.dup(root)
+    descriptor = None
     try:
+        descriptor = os.dup(root)
         for part in parts:
             if create and _entry_metadata(descriptor, part) is None:
                 os.mkdir(part, 0o700, dir_fd=descriptor)
@@ -155,8 +156,17 @@ def _parent(root, parts, create=False):
             os.close(descriptor)
             descriptor = child
         return descriptor
+    except TaskPersistenceError:
+        if descriptor is not None:
+            os.close(descriptor)
+        raise
+    except OSError:
+        if descriptor is not None:
+            os.close(descriptor)
+        raise TaskPersistenceError("private-artifact-invalid") from None
     except BaseException:
-        os.close(descriptor)
+        if descriptor is not None:
+            os.close(descriptor)
         raise
 
 
