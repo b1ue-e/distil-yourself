@@ -101,6 +101,20 @@ class CanonicalGraphTest(unittest.TestCase):
 
         self.assertEqual(raised.exception.code, "json-resource-limit")
 
+    def test_json_memory_budget_rejects_wide_string_before_materialization(self) -> None:
+        raw = b'"' + (b"a" * 120) + "😀".encode("utf-8") + b'"'
+        with mock.patch.object(adapters, "MAX_GRAPH_BYTES", len(raw)), mock.patch.object(
+            adapters, "MAX_JSON_PARSER_BYTES", 1000
+        ):
+            self.assertEqual(adapters.decode_event_graph_json('"中文"'.encode()), "中文")
+            with mock.patch.object(
+                adapters.json, "loads", wraps=adapters.json.loads
+            ) as loads, self.assertRaises(GraphValidationError) as raised:
+                adapters.decode_event_graph_json(raw)
+
+        self.assertEqual(raised.exception.code, "json-resource-limit")
+        loads.assert_not_called()
+
     def test_json_preflight_ignores_escaped_string_punctuation(self) -> None:
         self.assertTrue(hasattr(adapters, "_preflight_event_graph_json"))
         raw = b"[\"{[,:]}\",\"escaped quote: \\\"\"]"

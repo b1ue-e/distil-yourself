@@ -24,15 +24,19 @@ UTF-8, floats, non-finite numbers, oversized integers, malformed JSON, and
 excessive nesting. An already-materialized dictionary has no duplicate-key
 provenance and the validator does not claim otherwise.
 
-Before materialization, an iterative raw-byte lexical scan enforces at most
-750000 total lexical tokens, 500000 structural tokens, 250000 value tokens,
-200000 string tokens, and 64 nesting levels. Property names count as string and
-value tokens. The scanner follows JSON string escaping so punctuation inside a
-string does not consume structural budget. Budgeting a conservative 384 bytes
-of Python object and slot overhead per lexical token uses less than 275 MiB;
-reserving three complete 64 MiB raw, decoded-text, and canonical buffers keeps
-the conservative peak below the 512 MiB parser ceiling. A resource-budget
-violation rejects the input before `json.loads` materializes containers.
+Before UTF-8 decoding or materialization, an iterative raw-byte lexical scan
+enforces at most 750000 total lexical tokens, 500000 structural tokens, 250000
+value tokens, 200000 string tokens, and 64 nesting levels, and returns all four
+token counts. Property names count as string and value tokens. The scanner
+follows JSON string escaping so punctuation inside a string does not consume
+structural budget. After decoding and before `json.loads`, the parser requires
+`getsizeof(raw) + 2 * getsizeof(decoded_text) + MAX_GRAPH_BYTES + 384 *
+total_tokens <= 512 MiB`. The two decoded-text terms reserve the live decoded
+buffer and a conservative aggregate copy of materialized scalar payloads;
+`MAX_GRAPH_BYTES` reserves the canonical output buffer; and 384 bytes per token
+reserve container, scalar-object, and slot overhead. A resource-budget
+violation rejects the input before `json.loads` materializes any value. This
+dynamic check permits non-ASCII text when the total remains below the ceiling.
 
 ### Top-level object
 

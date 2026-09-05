@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import hashlib
 import json
 import re
+import sys
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 
@@ -15,6 +16,8 @@ MAX_JSON_STRUCTURAL_TOKENS = 500_000
 MAX_JSON_VALUE_TOKENS = 250_000
 MAX_JSON_STRING_TOKENS = 200_000
 MAX_JSON_NESTING_DEPTH = 64
+MAX_JSON_PARSER_BYTES = 512 * 1024 * 1024
+JSON_TOKEN_OVERHEAD_BYTES = 384
 MAX_CANONICAL_DEPTH = MAX_JSON_NESTING_DEPTH
 SNAPSHOT_ID = re.compile(r"sha256:[0-9a-f]{64}\Z")
 
@@ -240,12 +243,8 @@ def _decoded_integer(value: str) -> int:
     return int(value)
 
 
-def _preflight_event_graph_json(raw: bytes) -> None:
+def _preflight_event_graph_json(raw: bytes) -> Tuple[int, int, int, int]:
     """Bound JSON materialization with one iterative lexical scan."""
-
-    # 750k tokens at a conservative 384 bytes of Python object/slot overhead
-    # consume under 275 MiB. Three 64 MiB byte/text/canonical buffers keep the
-    # conservative process estimate below the 512 MiB parser ceiling.
     total_tokens = 0
     structural_tokens = 0
     value_tokens = 0
@@ -304,6 +303,7 @@ def _preflight_event_graph_json(raw: bytes) -> None:
             or string_tokens > MAX_JSON_STRING_TOKENS
         ):
             _reject("json-resource-limit", "/")
+    return total_tokens, structural_tokens, value_tokens, string_tokens
 
 
 def decode_event_graph_json(raw: bytes) -> Any:
@@ -313,11 +313,19 @@ def decode_event_graph_json(raw: bytes) -> Any:
         _reject("invalid-type", "/")
     if len(raw) > MAX_GRAPH_BYTES:
         _reject("graph-too-large", "/")
+    token_counts = _preflight_event_graph_json(raw)
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError:
         _reject("invalid-utf8", "/")
-    _preflight_event_graph_json(raw)
+    projected_bytes = (
+        sys.getsizeof(raw)
+        + (2 * sys.getsizeof(text))
+        + MAX_GRAPH_BYTES
+        + (token_counts[0] * JSON_TOKEN_OVERHEAD_BYTES)
+    )
+    if projected_bytes > MAX_JSON_PARSER_BYTES:
+        _reject("json-resource-limit", "/")
     try:
         return json.loads(
             text,
@@ -383,6 +391,20 @@ def _snapshot(value: Any, pointer: str) -> str:
     if SNAPSHOT_ID.fullmatch(value) is None:
         _reject("invalid-snapshot-id", pointer)
     return value
+
+
+def validate_validation_context(context: ValidationContext) -> Tuple[str, str]:
+    """Validate caller-established trust anchors without source access."""
+
+    if type(context) is not ValidationContext:
+        _reject("invalid-validation-context", "/context")
+    return (
+        _identifier(context.expected_owner_id, "/context/expected_owner_id"),
+        _snapshot(
+            context.expected_source_snapshot_id,
+            "/context/expected_source_snapshot_id",
+        ),
+    )
 
 
 def _enum(value: Any, allowed: Iterable[str], pointer: str) -> str:
@@ -844,16 +866,7 @@ def _validate_losses(value: Any, event_ids: Set[str]) -> None:
 def validate_event_graph(value: Any, *, context: ValidationContext) -> EventGraphManifest:
     """Validate a canonical graph and return its immutable content manifest."""
 
-    if type(context) is not ValidationContext:
-        _reject("invalid-validation-context", "/context")
-    expected_owner_id = _identifier(
-        context.expected_owner_id,
-        "/context/expected_owner_id",
-    )
-    expected_snapshot_id = _snapshot(
-        context.expected_source_snapshot_id,
-        "/context/expected_source_snapshot_id",
-    )
+    expected_owner_id, expected_snapshot_id = validate_validation_context(context)
     graph = _object(value, ROOT_FIELDS, "/")
     schema_version = _string(graph["schema_version"], "/schema_version", 1, 64, "invalid-version")
     if schema_version != SCHEMA_VERSION:

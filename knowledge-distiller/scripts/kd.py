@@ -16,6 +16,7 @@ from knowledge_distiller.adapters import (
     ValidationContext,
     decode_event_graph_json,
     validate_event_graph,
+    validate_validation_context,
 )
 from knowledge_distiller.artifacts import DraftValidationError, validate_draft
 from knowledge_distiller.persistence import (
@@ -135,8 +136,9 @@ def _event_graph_path(path: str) -> Tuple[str, List[str]]:
     if type(path) is not str or not path:
         raise CliInputError("unsafe-source-file")
     absolute = path.startswith(os.sep)
-    components = path.split(os.sep)[1:] if absolute else path.split(os.sep)
-    if not components or any(part in {"", ".", ".."} for part in components):
+    raw_components = path.split(os.sep)[1:] if absolute else path.split(os.sep)
+    components = [part for part in raw_components if part not in {"", "."}]
+    if not components:
         raise CliInputError("unsafe-source-file")
     return (os.sep if absolute else "."), components
 
@@ -198,7 +200,7 @@ def _read_event_graph(path: str) -> bytes:
         if metadata.st_nlink != 1:
             raise CliInputError("unsafe-source-file")
         if (
-            metadata.st_size >= 4096
+            metadata.st_size > 0
             and hasattr(metadata, "st_blocks")
             and metadata.st_blocks * 512 < metadata.st_size
         ):
@@ -238,6 +240,14 @@ def _validate_event_graph(
     expected_owner_id: str,
     expected_source_snapshot_id: str,
 ) -> Dict[str, Any]:
+    context = ValidationContext(
+        expected_owner_id=expected_owner_id,
+        expected_source_snapshot_id=expected_source_snapshot_id,
+    )
+    try:
+        validate_validation_context(context)
+    except GraphValidationError as error:
+        raise CliInputError(error.code)
     raw = _read_event_graph(path)
     try:
         graph = decode_event_graph_json(raw)
@@ -250,10 +260,6 @@ def _validate_event_graph(
         }:
             raise CliInputError(error.code)
         raise
-    context = ValidationContext(
-        expected_owner_id=expected_owner_id,
-        expected_source_snapshot_id=expected_source_snapshot_id,
-    )
     return asdict(validate_event_graph(graph, context=context))
 
 
