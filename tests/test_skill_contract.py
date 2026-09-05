@@ -390,6 +390,36 @@ class SkillContractTest(unittest.TestCase):
             self.assertIn(command, text)
         self.assertNotIn("persistent checkpoints, sealed evaluation", text)
 
+    def test_skill_routes_compatibility_questions_without_graph_validation(self) -> None:
+        paragraphs = [" ".join(part.split()) for part in self.skill_text().split("\n\n")]
+        routes = [
+            paragraph
+            for paragraph in paragraphs
+            if "adapter compatibility questions" in paragraph.lower()
+        ]
+        self.assertEqual(len(routes), 1)
+        route = routes[0]
+        self.assertIn("references/adapter-compatibility.md", route)
+        self.assertNotIn("adapter-contract.md", route)
+        self.assertNotIn("validate-event-graph", route)
+        self.assertNotIn("candidate canonical graph", route.lower())
+
+    def test_skill_routes_candidate_graphs_after_external_anchors(self) -> None:
+        paragraphs = [" ".join(part.split()) for part in self.skill_text().split("\n\n")]
+        routes = [
+            paragraph
+            for paragraph in paragraphs
+            if "candidate canonical graph" in paragraph.lower()
+        ]
+        self.assertEqual(len(routes), 1)
+        route = routes[0].lower()
+        self.assertIn("externally established", route)
+        self.assertIn("owner", route)
+        self.assertIn("source snapshot", route)
+        self.assertIn("references/adapter-contract.md", route)
+        self.assertIn("validate-event-graph", route)
+        self.assertNotIn("adapter-compatibility.md", route)
+
     def test_public_guidance_routes_canonical_graphs_through_the_bounded_gate(self) -> None:
         guidance = {
             "SKILL.md": (

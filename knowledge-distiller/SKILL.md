@@ -25,7 +25,9 @@ Do not trigger for ordinary summarization, generic knowledge questions, or skill
 
 Read [references/workflow.md](references/workflow.md) before changing task phase. Read [references/authorization.md](references/authorization.md) before resolving or reading any source. Read [references/artifact-policy.md](references/artifact-policy.md) before compiling or validating a domain draft.
 
-For adapter compatibility questions or canonical normalization, read [references/adapter-compatibility.md](references/adapter-compatibility.md) and [references/adapter-contract.md](references/adapter-contract.md), then use `validate-event-graph` below.
+For adapter compatibility questions, including readiness questions, read only [references/adapter-compatibility.md](references/adapter-compatibility.md).
+
+When a user provides a specific candidate canonical graph for normalization or validation, proceed only if the owner ID and source snapshot ID are externally established. Then read [references/adapter-contract.md](references/adapter-contract.md) and run `validate-event-graph` below.
 
 ## Foundation workflow
 
