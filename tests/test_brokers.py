@@ -29,7 +29,7 @@ class BrokerTest(unittest.TestCase):
         self.credentials = brokers.CredentialBinding(
             "user", "owner-1", "tenant-1", (("LARK_TEST_USER_TOKEN", "SECRET-CREDENTIAL"),))
         self.response = brokers.LarkResponse(
-            returncode=0, raw=b'{"native":"PRIVATE CONTENT"}', principal_kind="user",
+            returncode=0, raw=b'{"native":"PRIVATE CONTENT"}', media_type="application/json", principal_kind="user",
             active_principal="owner-1", tenant_account="tenant-1",
             selector_digest=digest(self.context.selector.encode()), purpose="distill",
             revision_before="42", revision_after="42", content_owner="collaborator-1",
@@ -85,7 +85,7 @@ class BrokerTest(unittest.TestCase):
         self.assertEqual(result.raw_digest, digest(self.response.raw))
         self.assertEqual(result.source_snapshot_id, result.raw_digest)
         self.assertEqual(result.selector_digest, digest(self.context.selector.encode()))
-        self.assertEqual(result.owner.id, "owner-1")
+        self.assertEqual(result.owner.id, "collaborator-1")
         self.assertEqual(result.source_byte_count, len(self.response.raw))
         self.assertEqual(result.evidence.native_schema_digest, self.response.native_schema_digest)
         self.assertFalse(hasattr(result, "adapter"))
@@ -104,6 +104,34 @@ class BrokerTest(unittest.TestCase):
         self.fetch(request=brokers.LarkRequest("DocABC123", "42"), context=context,
                    records=self.records(context))
         self.assertEqual(self.runner.call_args.args[0][4], "DocABC123")
+
+    def test_snapshot_owner_is_independently_attested_content_owner_for_both_sources(self):
+        lark = self.fetch()
+        _, context, request, identity = self.local()
+        session = self.read_session(context, request, identity)
+        for snapshot in (lark, session):
+            self.assertEqual(snapshot.owner.id, self.context.content_owner)
+            self.assertNotEqual(snapshot.owner.id, self.context.active_principal)
+            self.assertEqual(snapshot.owner.kind, "user")
+            self.assertEqual(snapshot.owner.verification, "verified-principal")
+        self.assertEqual(self.resolver.call_args.kwargs["active_principal"], "owner-1")
+
+    def test_reader_and_content_owner_substitution_is_rejected_before_io(self):
+        grant, attestation = self.records()
+        _, context, request, identity = self.local()
+        local_records = self.records(context)
+        with mock.patch("os.open") as opened:
+            for field, value in (("active_principal", "collaborator-1"), ("content_owner", "owner-1")):
+                self.reject(lambda: self.fetch(context=replace(self.context, **{field: value}),
+                                                records=(grant, attestation)))
+                self.reject(lambda: self.read_session(replace(context, **{field: value}),
+                                                       request, identity, local_records))
+            self.reject(lambda: self.fetch(records=(grant, replace(attestation, content_owner="owner-1"))))
+            self.reject(lambda: self.read_session(context, request, identity,
+                         (local_records[0], replace(local_records[1], content_owner="owner-1"))))
+            opened.assert_not_called()
+        self.resolver.assert_not_called()
+        self.runner.assert_not_called()
 
     def test_invalid_authorization_always_precedes_credential_and_source_io(self):
         grant, attestation = self.records()
@@ -165,8 +193,6 @@ class BrokerTest(unittest.TestCase):
         self.runner.side_effect = None
         for response, code in ((replace(self.response, returncode=1), "broker-command-failed"),
                                (replace(self.response, returncode=True), "broker-response-invalid"),
-                               (replace(self.response, raw=b"PRIVATE NOT JSON"), "broker-response-invalid"),
-                               (replace(self.response, raw=b'{"x":1,"x":2}'), "broker-response-invalid"),
                                (replace(self.response, raw="PRIVATE"), "broker-response-invalid"),
                                ({"raw": b"{}", "extra": "PRIVATE"}, "broker-response-invalid")):
             self.runner.return_value = response
@@ -224,10 +250,51 @@ class BrokerTest(unittest.TestCase):
             self.reject(lambda: self.read_session(ranged, request, identity), "invalid-source-bound")
             opened.assert_not_called()
 
-    def test_native_json_framing_requires_an_object_without_interpreting_fields(self):
-        for raw in (b"null", b"[]", b"true", b'"PRIVATE"'):
-            self.runner.return_value = replace(self.response, raw=raw)
+    def test_acquisition_keeps_response_bytes_opaque_and_never_calls_content_decoder(self):
+        # Transport type is attested by the trusted launcher. The isolated
+        # parser owns syntax, duplicate keys, UTF-8, and native document shape.
+        payloads = (b"{}", b"null", b"[]", b"true", b'"PRIVATE"',
+                    b"PRIVATE NOT JSON", b'{"x":1,"x":2}', b"\xff")
+        with mock.patch("knowledge_distiller.adapters.decode_event_graph_json",
+                        side_effect=AssertionError("broker called a content decoder")) as decoder:
+            for raw in payloads:
+                self.runner.return_value = replace(self.response, raw=raw)
+                try:
+                    snapshot = self.fetch()
+                except (AssertionError, brokers.BrokerError):
+                    self.fail("acquisition must preserve opaque bytes without content decoding")
+                self.assertEqual(snapshot.raw, raw)
+                self.assertEqual(snapshot.raw_digest, digest(raw))
+            decoder.assert_not_called()
+
+    def test_trusted_lark_receipt_declares_json_transport_type(self):
+        self.assertTrue(hasattr(self.response, "media_type"), "trusted receipt must declare transport type")
+        self.assertEqual(self.response.media_type, "application/json")
+        for media_type in (None, True, "text/html", "application/octet-stream"):
+            self.runner.return_value = replace(self.response, media_type=media_type)
             self.reject(self.fetch, "broker-response-invalid")
+
+    def test_local_prefix_confirmation_uses_one_target_open_and_one_descriptor(self):
+        path, context, request, identity = self.local()
+        original_open = os.open
+        target_fds = []
+
+        def open_once(name, flags, **kwargs):
+            descriptor = original_open(name, flags, **kwargs)
+            if not flags & os.O_DIRECTORY:
+                self.assertEqual(name, path.name)
+                target_fds.append(descriptor)
+            return descriptor
+
+        with mock.patch("os.open", side_effect=open_once), mock.patch("os.read", wraps=os.read) as read, mock.patch("os.lseek", wraps=os.lseek) as seek, mock.patch("os.close", wraps=os.close) as close, mock.patch("os.listdir", side_effect=AssertionError("enumeration")), mock.patch("os.scandir", side_effect=AssertionError("enumeration")):
+            self.assertEqual(self.read_session(context, request, identity).raw, b"abc")
+        self.assertEqual(len(target_fds), 1)
+        descriptor = target_fds[0]
+        self.assertEqual(read.call_args_list, [mock.call(descriptor, 3), mock.call(descriptor, 3)])
+        seek.assert_called_once_with(descriptor, 0, os.SEEK_SET)
+        self.assertIn(mock.call(descriptor), close.call_args_list)
+        with self.assertRaises(OSError):
+            os.fstat(descriptor)
 
     def test_string_subclasses_cannot_impersonate_verified_identities(self):
         class Impersonator(str):

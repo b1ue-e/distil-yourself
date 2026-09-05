@@ -4,8 +4,10 @@ No production launcher, credential discovery, or native adapter is provided.
 The injected Lark launcher must enforce the requested timeout/stream byte limit
 (including stderr, raising BufferError before retaining excess bytes),
 pin the endpoint/TLS identity, forbid redirects and principal fallback, and
-produce LarkResponse evidence from authenticated transport state, never document
-fields. Installed help establishes argv only, not a trusted response schema.
+produce LarkResponse evidence (including JSON transport type) from authenticated
+transport state, never document fields. Response bytes remain opaque; syntax and
+native content validation belong to the isolated parser. Installed help
+establishes argv only, not a trusted response schema.
 Credential variable names are declared by that launcher integration; this module
 does not claim any particular environment variable is supported by lark-cli.
 
@@ -53,6 +55,7 @@ class LarkResponse:
 
     returncode: int
     raw: bytes = field(repr=False)
+    media_type: str
     principal_kind: str
     active_principal: str
     tenant_account: str
@@ -152,7 +155,9 @@ def _evidence(product: str, version, schema_digest, project_id=None) -> NativeEv
 
 def _snapshot(raw: bytes, context, evidence: NativeEvidence) -> BrokerSnapshot:
     raw_digest = _digest(raw)
-    return BrokerSnapshot(raw, OwnerBinding("user", context.active_principal, "verified-principal"),
+    # _authorize independently validates the attestation's owner against this
+    # external context. The authenticated reader is not necessarily that owner.
+    return BrokerSnapshot(raw, OwnerBinding("user", context.content_owner, "verified-principal"),
                           _digest(context.selector.encode("utf-8")), raw_digest, raw_digest,
                           len(raw), evidence)
 
@@ -247,7 +252,8 @@ def fetch_lark(request: LarkRequest, *, grant: authorization.ContentGrant,
     except Exception:
         raise BrokerError("broker-response-invalid") from None
     _closed(response, LarkResponse, "broker-response-invalid")
-    if type(response.returncode) is not int or type(response.raw) is not bytes:
+    if (type(response.returncode) is not int or type(response.raw) is not bytes
+            or type(response.media_type) is not str or response.media_type != "application/json"):
         raise BrokerError("broker-response-invalid")
     if len(response.raw) > MAX_GRAPH_BYTES:
         raise BrokerError("broker-response-too-large")
@@ -266,13 +272,6 @@ def fetch_lark(request: LarkRequest, *, grant: authorization.ContentGrant,
             or response.content_owner != context.content_owner):
         raise BrokerError("broker-evidence-mismatch")
     evidence = _evidence("lark", response.product_version, response.native_schema_digest)
-    try:
-        # JSON framing/resource validation only. Never interpret native document
-        # fields, author claims, source IDs, or native support/version tuples.
-        if type(adapters.decode_event_graph_json(response.raw)) is not dict:
-            raise BrokerError("broker-response-invalid")
-    except adapters.GraphValidationError:
-        raise BrokerError("broker-response-invalid") from None
     return _snapshot(response.raw, context, evidence)
 
 
