@@ -77,21 +77,21 @@ The first native session target is Codex because it exercises the local CLI-sess
 - Modify: `knowledge-distiller/scripts/knowledge_distiller/persistence.py`
 - Modify: `tests/test_persistence.py`
 
-- [ ] **Step 1: Write failing private-store transaction tests**
+- [x] **Step 1: Write failing private-store transaction tests**
 
   Cover owner-only directories/files, descriptor-relative access, no symlink/hardlink/special-file acceptance, canonical manifests, immutable generation files, atomic commit, digest verification, crash recovery, idempotent replay, and cleanup of uncommitted raw staging on success, failure, cancellation, and next-start recovery.
 
-- [ ] **Step 2: Run the tests red**
+- [x] **Step 2: Run the tests red**
 
   Run: `python3 -m unittest tests.test_private_store tests.test_persistence -v`
 
   Expected: FAIL because private generation artifacts are not yet supported.
 
-- [ ] **Step 3: Add a narrow artifact transaction to the existing coordinator**
+- [x] **Step 3: Add a narrow artifact transaction to the existing coordinator**
 
   Reuse the existing generation, journal, fencing, fsync, and atomic-pointer mechanisms. Add only declared private paths under the task generation (`grants/`, `sources/`, `evidence/`, `provenance/`, `model/`, `decisions/`, and `draft-skill/`). Keep source text, selectors, and excerpts out of transition facts, logs, diagnostics, and telemetry.
 
-- [ ] **Step 4: Run the persistence tests green**
+- [x] **Step 4: Run the persistence tests green**
 
   Run: `python3 -m unittest tests.test_private_store tests.test_persistence -v`
 

@@ -143,7 +143,11 @@ python3 knowledge-distiller/scripts/kd.py validate-event-graph GRAPH.json \
 
 Task 1 遵循 TDD，定向测试从 19 项增至 28 项；主进程最新完整回归为 194/194 通过。独立规格复审为 `SPEC PASS`，独立质量复审为 `READY`，Critical、Important、Minor 均无遗留；精简与冗余审查未发现应删除的生产逻辑。实现提交为 `0d95a95`、测试边界补强为 `2004a7a`、质量修复为 `9cd02bc`。
 
-尚未读取真实来源，也尚未把任何 native adapter 从 `blocked` 改为 `supported`。Lark 与 Codex 的真实 fixture 捕获分别设有精确 selector、revision/range、ContentGrant 与 AuthorityAttestation 审批门。下一个实现项为 Task 2：私有 grants、snapshots、evidence 与 provenance 的安全持久化。
+Task 2 已完成：新增同 writer/fencing 绑定的 private artifact transaction，把 `grants/`、`sources/`、`evidence/`、`provenance/`、`model/`、`decisions/` 与 `draft-skill/` 作为 opaque private snapshot 纳入既有 `PREPARE → immutable generation → COMMIT → atomic pointer` 协议。manifest 只保存路径、字节数、SHA-256、content class 与 role；私有内容和 replay key 不进入 journal。normal transition 会验证并继承私有快照，旧 generation 保持兼容。
+
+Task 2 覆盖 owner-only 权限、descriptor-relative I/O、symlink/hardlink/sparse/special/xattr/moving-file 拒绝、资源上限、crash recovery、staging cleanup、exact replay、lineage/fencing、generation root 校验与取消时的 lock/FD 释放。主进程最新定向测试为 51/51，完整回归为 225/225，`compileall` 与 `git diff --check` 通过。独立规格复审为 `SPEC PASS`，质量复审为 `READY`，Critical、Important、Minor 均无遗留；冗余 callable assertions 已删除，未发现应进一步合并的生产 trust boundary。实现与修复提交为 `7dd9092`、`3c7bd2e`、`d451409`。
+
+尚未读取真实来源，也尚未把任何 native adapter 从 `blocked` 改为 `supported`。Lark 与 Codex 的真实 fixture 捕获分别设有精确 selector、revision/range、ContentGrant 与 AuthorityAttestation 审批门。下一个实现项为 Task 3：复用安全文件输入边界并实现只读 source brokers。
 
 ### 产品里程碑
 
