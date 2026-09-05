@@ -156,6 +156,82 @@ class PrivateStoreTest(unittest.TestCase):
         with self.assertRaises(TaskPersistenceError):
             self.commit()
 
+    def test_replay_substitutions_do_not_change_committed_storage(self):
+        snapshot = self.commit()
+        with TaskCoordinator(self.root) as coordinator:
+            def committed_storage():
+                return {
+                    str(path.relative_to(self.root)): path.read_bytes()
+                    for path in self.root.rglob("*")
+                    if path.is_file() and "raw-staging" not in path.parts
+                }
+            before = committed_storage()
+            substitutions = (
+                (Event.CANCEL, TransitionFacts(has_seed=True), self.initial.generation_id),
+                (Event.START_DISCOVER, TransitionFacts(has_seed=False), self.initial.generation_id),
+                (Event.START_DISCOVER, TransitionFacts(has_seed=True), snapshot.generation_id),
+            )
+            for event, facts, prior in substitutions:
+                with self.subTest(event=event, prior=prior), self.transaction(coordinator, prior=prior) as transaction:
+                    transaction.add("sources/snapshot.json", b"synthetic-private-selector-excerpt")
+                    with self.assertRaises(TaskPersistenceError) as caught:
+                        transaction.commit(event, facts)
+                    self.assertEqual(str(caught.exception), "private-replay-mismatch")
+                self.assertEqual(committed_storage(), before)
+            with self.transaction(coordinator) as transaction:
+                transaction.add("sources/snapshot.json", b"synthetic-private-selector-excerpt")
+                replay = transaction.commit(Event.START_DISCOVER, TransitionFacts(has_seed=True))
+            self.assertEqual(replay.generation_id, snapshot.generation_id)
+            self.assertEqual(committed_storage(), before)
+
+    def test_orphan_cleanup_checks_aggregate_limit_before_reading_payloads(self):
+        from knowledge_distiller import private_store
+        with TaskCoordinator(self.root) as coordinator:
+            transaction = self.transaction(coordinator)
+            transaction.__enter__()
+            transaction.add("sources/a", b"1234")
+            transaction.add("sources/b", b"5678")
+            transaction._close()
+        pointer = (self.root / "current-generation").read_bytes()
+        with mock.patch.object(private_store, "MAX_TOTAL_BYTES", 7):
+            with mock.patch.object(private_store, "read_private", wraps=private_store.read_private) as reads:
+                with self.assertRaises(TaskPersistenceError) as caught:
+                    recover_task(self.root)
+                self.assertEqual(str(caught.exception), "private-staging-limit")
+                self.assertEqual(reads.call_count, 0)
+            self.assertFalse(self.staging_files())
+            self.assertEqual((self.root / "current-generation").read_bytes(), pointer)
+            self.assertEqual(recover_task(self.root).generation_id, self.initial.generation_id)
+
+    def test_orphan_cleanup_accepts_exact_aggregate_limit(self):
+        from knowledge_distiller import private_store
+        with TaskCoordinator(self.root) as coordinator:
+            transaction = self.transaction(coordinator)
+            transaction.__enter__()
+            transaction.add("sources/a", b"1234")
+            transaction.add("sources/b", b"5678")
+            transaction._close()
+        with mock.patch.object(private_store, "MAX_TOTAL_BYTES", 8):
+            self.assertEqual(recover_task(self.root).generation_id, self.initial.generation_id)
+        self.assertFalse(self.staging_files())
+
+    def test_orphan_directories_share_recovery_byte_budget(self):
+        from knowledge_distiller import private_store
+        with TaskCoordinator(self.root) as coordinator:
+            for index in range(2):
+                transaction = self.transaction(coordinator, transaction_id="orphan-" + str(index))
+                transaction.__enter__()
+                transaction.add("sources/a", b"1234")
+                transaction._close()
+        with mock.patch.object(private_store, "MAX_TOTAL_BYTES", 7):
+            with mock.patch.object(private_store, "read_private", wraps=private_store.read_private) as reads:
+                with self.assertRaises(TaskPersistenceError) as caught:
+                    recover_task(self.root)
+                self.assertEqual(str(caught.exception), "private-staging-limit")
+                self.assertLessEqual(reads.call_count, 1)
+            self.assertFalse(self.staging_files())
+            self.assertEqual(recover_task(self.root).generation_id, self.initial.generation_id)
+
     def test_normal_transition_preserves_private_bytes_without_mutating_old_generation(self):
         first = self.commit()
         old = self.root / "generations" / first.generation_id
@@ -234,6 +310,35 @@ class PrivateStoreTest(unittest.TestCase):
                         if target.exists():
                             set_attribute(target, remove=True)
                     self.assertEqual(inspect_task(self.root).generation_id, self.initial.generation_id)
+
+    def test_rejects_xattrs_on_committed_generation_root(self):
+        import ctypes
+        snapshot = self.commit()
+        generation = self.root / "generations" / snapshot.generation_id
+        libc = ctypes.CDLL(None, use_errno=True)
+        if hasattr(os, "setxattr"):
+            os.setxattr(generation, "user.synthetic", b"synthetic")
+            remove = lambda: os.removexattr(generation, "user.synthetic")
+        else:
+            descriptor = os.open(generation, os.O_RDONLY)
+            try:
+                self.assertEqual(libc.fsetxattr(descriptor, b"user.synthetic", b"synthetic", 9, 0, 0), 0)
+            finally:
+                os.close(descriptor)
+            def remove():
+                descriptor = os.open(generation, os.O_RDONLY)
+                try:
+                    self.assertEqual(libc.fremovexattr(descriptor, b"user.synthetic", 0), 0)
+                finally:
+                    os.close(descriptor)
+        try:
+            with self.assertRaises(TaskPersistenceError):
+                inspect_task(self.root)
+            with self.assertRaises(TaskPersistenceError):
+                with TaskCoordinator(self.root) as coordinator:
+                    coordinator.transition(Event.CANCEL, TransitionFacts())
+        finally:
+            remove()
 
     def test_rejects_staging_directory_permission_change(self):
         with TaskCoordinator(self.root) as coordinator:

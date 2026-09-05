@@ -163,6 +163,8 @@ def _parent(root, parts, create=False):
 def read_artifacts(generation, entries):
     """Validate exact directory membership and every declared digest."""
     _manifest_validate(entries)
+    _verify_directory_descriptor(generation)
+    _no_xattrs(generation)
     expected = {(): {"state.json", "manifest.json"}}
     for entry in entries:
         parts = _parts(entry["path"])
@@ -231,11 +233,86 @@ def _remove_staging(parent, name):
         os.close(descriptor)
 
 
+def _preflight_staged_slot(parent, name):
+    """Verify generated staging metadata without reading a payload."""
+    descriptor = None
+    try:
+        before = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        if not stat.S_ISREG(before.st_mode) or getattr(before, "st_blocks", 0) * 512 < before.st_size:
+            _fail()
+        descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+        _verify_regular_descriptor(descriptor)
+        _no_xattrs(descriptor)
+        if _signature(os.fstat(descriptor)) != _signature(before) or before.st_size > MAX_FILE_BYTES:
+            _fail()
+        return _signature(before), before.st_size
+    except (OSError, TaskPersistenceError):
+        raise TaskPersistenceError("private-artifact-invalid") from None
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def _preflight_staging(parent):
+    """Return verified generated slots and their total size without payload reads."""
+    verified = []
+    total = 0
+    for name in os.listdir(parent):
+        if not re.fullmatch(r"s-[0-9a-f]{32}", name):
+            _fail()
+        descriptor = _private_directory(parent, name)
+        try:
+            slots = os.listdir(descriptor)
+            if len(slots) > MAX_FILES:
+                _fail()
+            entries = []
+            for slot in slots:
+                if not re.fullmatch(r"f-[0-9a-f]{32}", slot):
+                    _fail()
+                signature, size = _preflight_staged_slot(descriptor, slot)
+                entries.append((slot, signature))
+                total += size
+            verified.append((name, _signature(os.fstat(descriptor)), entries))
+        finally:
+            os.close(descriptor)
+    return verified, total
+
+
+def _remove_verified_staging(parent, name, expected_identity, slots):
+    """Delete only entries that still match a complete metadata preflight."""
+    descriptor = _private_directory(parent, name)
+    try:
+        if _signature(os.fstat(descriptor)) != expected_identity or set(os.listdir(descriptor)) != {slot for slot, _ in slots}:
+            _fail()
+        for slot, signature in slots:
+            if _signature(os.stat(slot, dir_fd=descriptor, follow_symlinks=False)) != signature:
+                _fail()
+            os.unlink(slot, dir_fd=descriptor)
+        if os.listdir(descriptor):
+            _fail()
+        _fsync_directory(descriptor)
+        current = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        pinned = os.fstat(descriptor)
+        if (current.st_dev, current.st_ino) != (pinned.st_dev, pinned.st_ino):
+            _fail()
+        os.rmdir(name, dir_fd=parent)
+        _fsync_directory(parent)
+    except OSError:
+        raise TaskPersistenceError("private-cleanup-failed") from None
+    finally:
+        os.close(descriptor)
+
+
 def recover_staging(root):
     if _entry_metadata(root, STAGING) is None:
         return
     descriptor = _private_directory(root, STAGING)
     try:
+        verified, total = _preflight_staging(descriptor)
+        if total > MAX_TOTAL_BYTES:
+            for name, identity, slots in verified:
+                _remove_verified_staging(descriptor, name, identity, slots)
+            raise TaskPersistenceError("private-staging-limit")
         for name in os.listdir(descriptor):
             _remove_staging(descriptor, name)
     finally:
