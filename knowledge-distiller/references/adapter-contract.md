@@ -26,10 +26,11 @@ provenance and the validator does not claim otherwise.
 
 Before UTF-8 decoding or materialization, an iterative raw-byte lexical scan
 enforces at most 750000 total lexical tokens, 500000 structural tokens, 250000
-value tokens, 200000 string tokens, and 64 nesting levels, and returns all four
-token counts. Property names count as string and value tokens. The scanner
-follows JSON string escaping so punctuation inside a string does not consume
-structural budget. After decoding and before `json.loads`, the parser requires
+value tokens, 200000 string tokens, and 64 nesting levels. It returns only the
+total token count; the other counts remain internal ceiling checks. Property
+names count as string and value tokens. The scanner follows JSON string escaping
+so punctuation inside a string does not consume structural budget. After
+decoding and before `json.loads`, the parser requires
 `getsizeof(raw) + 2 * getsizeof(decoded_text) + MAX_GRAPH_BYTES + 384 *
 total_tokens <= 512 MiB`. The two decoded-text terms reserve the live decoded
 buffer and a conservative aggregate copy of materialized scalar payloads;

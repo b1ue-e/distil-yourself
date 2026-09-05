@@ -243,7 +243,7 @@ def _decoded_integer(value: str) -> int:
     return int(value)
 
 
-def _preflight_event_graph_json(raw: bytes) -> Tuple[int, int, int, int]:
+def _preflight_event_graph_json(raw: bytes) -> int:
     """Bound JSON materialization with one iterative lexical scan."""
     total_tokens = 0
     structural_tokens = 0
@@ -303,7 +303,7 @@ def _preflight_event_graph_json(raw: bytes) -> Tuple[int, int, int, int]:
             or string_tokens > MAX_JSON_STRING_TOKENS
         ):
             _reject("json-resource-limit", "/")
-    return total_tokens, structural_tokens, value_tokens, string_tokens
+    return total_tokens
 
 
 def decode_event_graph_json(raw: bytes) -> Any:
@@ -313,7 +313,7 @@ def decode_event_graph_json(raw: bytes) -> Any:
         _reject("invalid-type", "/")
     if len(raw) > MAX_GRAPH_BYTES:
         _reject("graph-too-large", "/")
-    token_counts = _preflight_event_graph_json(raw)
+    total_tokens = _preflight_event_graph_json(raw)
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError:
@@ -322,7 +322,7 @@ def decode_event_graph_json(raw: bytes) -> Any:
         sys.getsizeof(raw)
         + (2 * sys.getsizeof(text))
         + MAX_GRAPH_BYTES
-        + (token_counts[0] * JSON_TOKEN_OVERHEAD_BYTES)
+        + (total_tokens * JSON_TOKEN_OVERHEAD_BYTES)
     )
     if projected_bytes > MAX_JSON_PARSER_BYTES:
         _reject("json-resource-limit", "/")

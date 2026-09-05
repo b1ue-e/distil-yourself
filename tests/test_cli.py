@@ -446,6 +446,25 @@ class CliTest(unittest.TestCase):
                     result = self.run_cli(*self.event_graph_arguments(path))
                     self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_validate_event_graph_does_not_normalize_trailing_directory_aliases(self) -> None:
+        fixture = ROOT / "tests" / "fixtures" / "adapters" / "minimal-valid.json"
+        with tempfile.TemporaryDirectory() as directory:
+            graph = Path(directory).resolve() / "graph.json"
+            graph.write_bytes(fixture.read_bytes())
+            for path in (
+                str(graph) + "/",
+                str(graph) + "/.",
+                str(graph) + "//",
+                str(graph) + "/..",
+            ):
+                with self.subTest(path=path):
+                    result = self.run_cli(*self.event_graph_arguments(path))
+                    self.assertEqual(result.returncode, 2)
+                    self.assertEqual(
+                        json.loads(result.stderr)["error"],
+                        {"code": "invalid-input", "reason": "unsafe-source-file"},
+                    )
+
     def test_validate_event_graph_rejects_empty_source_path(self) -> None:
         result = self.run_cli(*self.event_graph_arguments(""))
 

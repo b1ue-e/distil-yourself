@@ -267,6 +267,7 @@ class SkillContractTest(unittest.TestCase):
             "250000 value tokens",
             "200000 string tokens",
             "64 nesting levels",
+            "returns only the total token count",
             "getsizeof(raw) + 2 * getsizeof(decoded_text) + MAX_GRAPH_BYTES + 384 * total_tokens <= 512 MiB",
             "aggregate copy of materialized scalar payloads",
             "reserves the canonical output buffer",

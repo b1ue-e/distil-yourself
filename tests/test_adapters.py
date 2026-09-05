@@ -118,6 +118,7 @@ class CanonicalGraphTest(unittest.TestCase):
     def test_json_preflight_ignores_escaped_string_punctuation(self) -> None:
         self.assertTrue(hasattr(adapters, "_preflight_event_graph_json"))
         raw = b"[\"{[,:]}\",\"escaped quote: \\\"\"]"
+        self.assertEqual(adapters._preflight_event_graph_json(raw), 5)
         limits = (
             mock.patch.object(adapters, "MAX_JSON_TOKENS", 5),
             mock.patch.object(adapters, "MAX_JSON_STRUCTURAL_TOKENS", 3),

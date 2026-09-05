@@ -137,9 +137,9 @@ def _event_graph_path(path: str) -> Tuple[str, List[str]]:
         raise CliInputError("unsafe-source-file")
     absolute = path.startswith(os.sep)
     raw_components = path.split(os.sep)[1:] if absolute else path.split(os.sep)
-    components = [part for part in raw_components if part not in {"", "."}]
-    if not components:
+    if raw_components[-1] in {"", ".", ".."}:
         raise CliInputError("unsafe-source-file")
+    components = [part for part in raw_components if part not in {"", "."}]
     return (os.sep if absolute else "."), components
 
 
