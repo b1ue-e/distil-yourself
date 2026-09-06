@@ -209,6 +209,40 @@ class RedactionTest(unittest.TestCase):
         self.reject(lambda: r.ProvenanceNode("native-locator", span.span_id))
         self.reject(lambda: r.ProvenanceNode("unknown", digest("fake")))
 
+    def test_malformed_armor_separator_variants_never_expose_payload(self):
+        payload = "synthetic-private-秘密-payload"
+        for label in ("PRIVATE KEY", "PRIVATE-KEY", "PRIVATE_KEY", "PRIVATE\tKEY", "PRIVATE  KEY",
+                      "PRIVATE\u00a0KEY", "PGP_PRIVATE_KEY_BLOCK", "RSA\tPRIVATE_- \tKEY"):
+            for hyphens in ("", "-", "----", "-----", "------"):
+                if label == "PRIVATE KEY" and hyphens == "-----":
+                    continue  # This is the supported exact envelope.
+                with self.subTest(label=label, hyphens=hyphens):
+                    armor = hyphens + "BEGIN " + label + hyphens + "\r\n" + payload + "\r\n" + hyphens + "END " + label + hyphens
+                    error = self.reject(lambda: self.run_text(armor, one_byte=True), "invalid-private-key")
+                    for diagnostic in (str(error), repr(error), repr(error.args), repr(vars(error))):
+                        self.assertNotIn(payload, diagnostic)
+        for marker in ("BEGIN", "END"):
+            for label in ("PRIVATE_KEY", "PRIVATE\tKEY", "PGP PRIVATE-KEY BLOCK"):
+                self.reject(lambda: self.run_text(marker + " " + label, one_byte=True), "invalid-private-key")
+        for prefix in ("BEGIN " + " " * r.MAX_ARMOR_LINE_CHARS,
+                       "BEGIN " + "X" * r.MAX_ARMOR_LINE_CHARS + " ",
+                       "-" * r.MAX_ARMOR_LINE_CHARS + "BEGIN "):
+            self.reject(lambda: self.run_text(prefix + "PRIVATE_KEY", one_byte=True), "invalid-private-key")
+
+    def test_armor_recognition_preserves_prose_and_supports_exact_crlf(self):
+        for prose in ("begin private key rotation safely", "BEGIN PRIVATE KEY ROTATION SAFELY",
+                      "begin private-key rotation safely", "begin private_key rotation safely",
+                      "BEGIN PRİVATE KEY", "BEGIN PRIVATE KEY",
+                      "begin private key rotation safely " * 20,
+                      "We begin private key rotation safely. The end private key marker is documented."):
+            with self.subTest(prose=prose):
+                self.assertEqual(self.run_text(prose, one_byte=True)[0].text, prose)
+        armor = "\t-----BEGIN PGP PRIVATE KEY BLOCK-----\r\nprivate-synthetic-data\r\n\t-----END PGP PRIVATE KEY BLOCK-----\r\n"
+        result = self.run_text(armor, one_byte=True)
+        self.assertIn("[redacted:private-key:", result[0].text)
+        self.assertNotIn("private-synthetic-data", repr(dataclasses.asdict(result[0])))
+        self.assertEqual(result, self.run_text(armor))
+
     def test_public_validator_rejects_mutated_results_and_subclasses(self):
         self.assertTrue(hasattr(r, "validate_redaction_result"), "defensive output validator is missing")
         def validate(result, **changes):

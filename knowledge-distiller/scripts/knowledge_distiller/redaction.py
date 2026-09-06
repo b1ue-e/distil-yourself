@@ -289,11 +289,26 @@ def validate_redaction_result(result, *, context: TrustContext, key: bytes) -> T
 _PRIVATE_KEY_LABELS = frozenset(("PRIVATE KEY", "RSA PRIVATE KEY", "EC PRIVATE KEY", "DSA PRIVATE KEY",
                                "OPENSSH PRIVATE KEY", "ENCRYPTED PRIVATE KEY", "PGP PRIVATE KEY BLOCK"))
 _ARMOR_DELIMITER = re.compile(r"-----(BEGIN|END) ([A-Z0-9 ]{1,64})-----")
+_ARMOR_MARKER = re.compile(r"[\s_-]*(?ai:BEGIN|END)(?=[\s_-])")
+_ARMOR_LABEL_PAIR = re.compile(r"(?<![A-Za-z0-9])(?ai:PRIVATE)[\s_-]+(?ai:KEY)(?![A-Za-z0-9])")
+_ARMOR_LABEL_END = re.compile(r"(?<![A-Za-z0-9])(?ai:PRIVATE)[\s_-]+(?ai:KEY)(?:[\s_-]+(?ai:BLOCK))?[\s_-]*\Z")
 _ASSIGN = re.compile(r"(?i)(?<![^\W_])(?:password|passwd|pwd|secret|secret[_-]access[_-]key|client_secret|token|api[_-]?key|api[_-]?token|session(?:[_-]?token|[_-]?id)?|access[_-]?token|refresh[_-]?token)[\"']?[ \t]{0,32}[:=][ \t]{0,32}")
 _BEARER = re.compile(r"(?i)(?<!\w)bearer[ \t]{1,32}")
 _COOKIE = re.compile(r"(?im)^[ \t]{0,32}(?:set-cookie|cookie)[ \t]{0,32}:[ \t]{0,32}")
 _EMAIL = re.compile(r"(?<![\w.+-])[\w.+-]{1,128}@[\w-]{1,128}(?:\.[\w-]{1,63}){1,8}(?![\w.-])")
 _PHONE = re.compile(r"(?<!\w)\+?[0-9][0-9 ()-]{5,30}[0-9](?!\w)")
+
+
+def _armor_suspicious(line):
+    # Recognition only: whitespace/hyphen/underscore separators never repair an
+    # invalid envelope. Case matching stays ASCII, excluding Unicode confusables.
+    # Bare BEGIN/END lines must end in PRIVATE KEY [BLOCK]; continuation prose
+    # such as "begin private key rotation safely" is not a delimiter. Dashed
+    # private-key-looking lines remain suspicious even with broken marker words.
+    # These lexical scans are linear over the already bounded source. They make
+    # no normalized line copy; the delimiter length gate runs before strip/fullmatch.
+    return ((_ARMOR_MARKER.match(line) is not None and _ARMOR_LABEL_END.search(line) is not None)
+            or ("---" in line and _ARMOR_LABEL_PAIR.search(line) is not None))
 
 
 class Redactor:
@@ -341,8 +356,7 @@ class Redactor:
             if active is not None and end - active[1] > MAX_PRIVATE_KEY_CHARS:
                 _fail("secret-limit")
             line = text[position:end]
-            upper = line.upper()
-            if "PRIVATE KEY" in upper and "-" in line and ("---" in line or "BEGIN" in upper or "END" in upper):
+            if _armor_suspicious(line):
                 if len(line) > MAX_ARMOR_LINE_CHARS:
                     _fail("invalid-private-key")
                 delimiter = _ARMOR_DELIMITER.fullmatch(line.strip(" \t\r"))
