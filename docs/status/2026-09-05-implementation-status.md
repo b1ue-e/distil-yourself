@@ -1,6 +1,6 @@
 # Knowledge Distiller 实现状态
 
-更新时间：2026-09-05（Asia/Shanghai）
+更新时间：2026-09-06（Asia/Shanghai）
 
 ## 当前结论
 
@@ -147,7 +147,11 @@ Task 2 已完成：新增同 writer/fencing 绑定的 private artifact transacti
 
 Task 2 覆盖 owner-only 权限、descriptor-relative I/O、symlink/hardlink/sparse/special/xattr/moving-file 拒绝、资源上限、crash recovery、staging cleanup、exact replay、lineage/fencing、generation root 校验与取消时的 lock/FD 释放。主进程最新定向测试为 51/51，完整回归为 225/225，`compileall` 与 `git diff --check` 通过。独立规格复审为 `SPEC PASS`，质量复审为 `READY`，Critical、Important、Minor 均无遗留；冗余 callable assertions 已删除，未发现应进一步合并的生产 trust boundary。实现与修复提交为 `7dd9092`、`3c7bd2e`、`d451409`。
 
-尚未读取真实来源，也尚未把任何 native adapter 从 `blocked` 改为 `supported`。Lark 与 Codex 的真实 fixture 捕获分别设有精确 selector、revision/range、ContentGrant 与 AuthorityAttestation 审批门。下一个实现项为 Task 3：复用安全文件输入边界并实现只读 source brokers。
+Task 3 已完成：将 `kd.py` 的显式路径、逐级 `O_NOFOLLOW`、regular/hardlink/sparse/special、权限/xattr、byte ceiling、moving-file 与 descriptor cleanup 逻辑提取为共享 `source_io`，旧 event-graph CLI 通过同一边界读取，不再维护重复 walker。新增 Lark 与 local-session broker policy：授权验证先于 credential/source I/O；Lark 只能构造固定 user-principal argv 和最小环境，通过注入的 trusted launcher 获取 opaque JSON transport bytes；本地 session 只允许从 byte 0 开始的 closed prefix，单一 descriptor 双次确认，stable append 排除在 snapshot 外，prefix 修改/截断/重排拒绝。
+
+Task 3 的 broker snapshot 区分 active reader 与独立 attested `content_owner`，不会把技术读取者误标为内容所有者；broker 不调用 document/event adapter parser，也未添加任何 production runner 或 native support tuple。主进程最新定向测试为 115/115，完整回归为 256/256，`compileall` 与 `git diff --check` 通过。独立规格复审为 `SPEC PASS`，质量复审为 `READY`，Critical、Important、Minor 均无遗留；安全文件读取重复代码已移除，broker 的授权、credential、receipt 与 source trust layers 被确认是必要的独立边界。实现与修复提交为 `722b8b4`、`7286cd6`、`54ef068`。
+
+尚未读取真实来源，也尚未把任何 native adapter 从 `blocked` 改为 `supported`。Lark 与 Codex 的真实 fixture 捕获分别设有精确 selector、revision/range、ContentGrant 与 AuthorityAttestation 审批门。下一个实现项为 Task 4：在用户给出精确 Lark selector 与内容授权后，捕获最小化脱敏 fixture 并实现版本固定的 Lark document adapter。
 
 ### 产品里程碑
 

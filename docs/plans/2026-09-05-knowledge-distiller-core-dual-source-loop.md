@@ -108,23 +108,23 @@ The first native session target is Codex because it exercises the local CLI-sess
 - Modify: `knowledge-distiller/scripts/kd.py`
 - Modify: `tests/test_cli.py`
 
-- [ ] **Step 1: Write failing safe-input refactor tests**
+- [x] **Step 1: Write failing safe-input refactor tests**
 
   Move the already-tested regular-file guarantees behind a reusable API without weakening them: explicit path only, component-wise `O_NOFOLLOW`, link count one, sparse/special-file rejection, pre/post `fstat` identity checks, 64 MiB ceiling, moving-file rejection, and guaranteed descriptor cleanup. Keep all current event-graph boundary tests green.
 
-- [ ] **Step 2: Refactor the existing event-graph reader**
+- [x] **Step 2: Refactor the existing event-graph reader**
 
   Make `kd.py` delegate to `source_io.py`; do not duplicate path-walking and descriptor code for session ingestion.
 
-- [ ] **Step 3: Write failing broker-policy tests**
+- [x] **Step 3: Write failing broker-policy tests**
 
   Lark tests must require exactly one normalized document URL/token, pinned revision, `--as user`, JSON response, an allowlisted `docs +fetch` argv, no shell, no redirects/fallback principal, a cleared credential-leaking environment, timeout, and byte ceiling. Local-session tests must require one exact granted file and byte/range bounds; they must prove no directory enumeration or adjacent-file access occurs. Both brokers must validate the active grant/attestation before touching the source.
 
-- [ ] **Step 4: Implement broker command construction and bounded reads**
+- [x] **Step 4: Implement broker command construction and bounded reads**
 
   Inject a subprocess runner and credential resolver so tests do not call Lark or read real sessions. The Lark broker alone receives the minimal required authentication environment. The parser receives bytes and broker-established trust anchors, never credentials or ambient environment state.
 
-- [ ] **Step 5: Run boundary and broker tests green**
+- [x] **Step 5: Run boundary and broker tests green**
 
   Run: `python3 -m unittest tests.test_source_io tests.test_brokers tests.test_cli -v`
 
