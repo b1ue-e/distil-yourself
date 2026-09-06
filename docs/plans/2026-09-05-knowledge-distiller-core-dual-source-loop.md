@@ -137,21 +137,21 @@ The first native session target is Codex because it exercises the local CLI-sess
 - Create: `knowledge-distiller/scripts/knowledge_distiller/redaction.py`
 - Create: `tests/test_redaction.py`
 
-- [ ] **Step 1: Write failing deterministic-redaction tests**
+- [x] **Step 1: Write failing deterministic-redaction tests**
 
   Cover private keys, bearer/session tokens, cookies, credential-shaped assignments, emails, phone numbers, participant names/IDs, overlapping detections, arbitrary chunk boundaries, Unicode, false-positive allowlisting, stable placeholder IDs, and a guarantee that removed values never appear in outputs, errors, logs, manifests, or provenance metadata. Require exact byte/item/depth ceilings before retaining output.
 
-- [ ] **Step 2: Run redaction tests red**
+- [x] **Step 2: Run redaction tests red**
 
   Run: `python3 -m unittest tests.test_redaction -v`
 
   Expected: FAIL because the redaction module does not exist.
 
-- [ ] **Step 3: Implement streaming redaction and provenance spans**
+- [x] **Step 3: Implement streaming redaction and provenance spans**
 
   Emit minimally sufficient redacted spans with immutable IDs and typed derivation edges: redacted span -> native locator digest -> source snapshot -> ingestion run -> active grant/attestation digests. Preserve owner statements separately from non-owner context and mark non-owner content claim-ineligible by default. Never retain removed values in detector state after finalization, diagnostics, or provenance.
 
-- [ ] **Step 4: Run redaction and boundary tests green**
+- [x] **Step 4: Run redaction and boundary tests green**
 
   Run: `python3 -m unittest tests.test_redaction tests.test_source_io tests.test_sources -v`
 

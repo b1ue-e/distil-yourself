@@ -4,13 +4,12 @@
 
 ## 当前结论
 
-`knowledge-distiller` 已完成设计、确定性基础设施、持久化 checkpoint、适配器兼容性门禁、canonical event graph validator、第一版本地验证 CLI、输入边界安全加固和 adapter guidance integration。Task 3 与 Task 4 均已通过规格与质量双审，结论均为 Ready；Task 5 最终独立评审同样为 Ready，Critical、Important、Minor 均无遗留。
+`knowledge-distiller` 已完成既有 adapter-contract 里程碑，以及 core dual-source loop 的 Task 1–4：授权/source contracts、私有原子 artifact store、只读 source broker 和 deterministic pre-ingestion redaction。当前下一项为 Task 5 的 version-pinned Lark document adapter。
 
-主进程与最终独立 reviewer 均运行完整测试套件，166/166 通过；`compileall`、`git diff --check` 和 repository cache 检查全部通过。完整验证命令为：
+主进程最新严格完整测试为 287/287 通过；Task 4 定向边界测试为 60/60 通过，`compileall` 与 `git diff --check` 通过。完整验证命令为：
 
 ```bash
-PYTHONDONTWRITEBYTECODE=1 python3 -W error::ResourceWarning \
-  -m unittest discover -s tests -v
+PYTHONWARNINGS=error python3 -m unittest discover -s tests -v
 ```
 
 四个原生来源适配器仍全部为 `blocked`，没有把任何产品或 native schema 宣称为已支持。
@@ -18,9 +17,9 @@ PYTHONDONTWRITEBYTECODE=1 python3 -W error::ResourceWarning \
 ## 分支与提交
 
 - 当前分支：`feat/implement_knowledge_distiller`
-- 最新实现提交：`3f48383 fix: reject lone json surrogates`
+- 最新实现提交：`af20c22 fix: normalize malformed armor separators`
 - 未 push、未 merge、未安装、未导出、未发布
-- 相对 `origin/main` 有 13 个既有实现/设计提交，另加本次 completion-record 提交
+- 当前相对本地 `origin/main` ahead 43、behind 0
 
 已完成的本地提交：
 
@@ -151,20 +150,24 @@ Task 3 已完成：将 `kd.py` 的显式路径、逐级 `O_NOFOLLOW`、regular/h
 
 Task 3 的 broker snapshot 区分 active reader 与独立 attested `content_owner`，不会把技术读取者误标为内容所有者；broker 不调用 document/event adapter parser，也未添加任何 production runner 或 native support tuple。主进程最新定向测试为 115/115，完整回归为 256/256，`compileall` 与 `git diff --check` 通过。独立规格复审为 `SPEC PASS`，质量复审为 `READY`，Critical、Important、Minor 均无遗留；安全文件读取重复代码已移除，broker 的授权、credential、receipt 与 source trust layers 被确认是必要的独立边界。实现与修复提交为 `722b8b4`、`7286cd6`、`54ef068`。
 
-尚未读取真实来源，也尚未把任何 native adapter 从 `blocked` 改为 `supported`。用户已提供精确 Wiki selector，并将授权范围限制为该页面的当前版本；真实读取仍需先完成 content-owner/authority 绑定。根据 2026-09-06 的安全顺序调整，先执行 Task 4 的确定性 pre-ingestion redaction boundary，完成并评审后才解析 Wiki 当前 revision、捕获最小化脱敏 fixture 和实现版本固定的 Lark document adapter。
+Task 4 已完成：新增纯内存、无 I/O、资源有界且单次使用的 deterministic redactor。它在任何 native parser 或持久化之前处理 bounded source spans，覆盖私钥装甲、bearer/session token、cookie、credential assignment、邮箱、电话和显式 participant name/ID；placeholder 使用按类型分域的 HMAC-SHA256。每个结果都绑定外部 source binding、位置、owner context、run、grant/attestation 和 typed provenance chain，公开 validator 需要调用方提供完整 `expected_bindings`，可拒绝 reorder、duplicate、跨 source substitution 与篡改。只有 `actor_kind=user`、`actor_resolution=verified-owner` 且 actor ID 与 context owner 精确一致时才可作为 owner claim。
+
+私钥装甲识别经多轮对抗评审后收敛为单次 O(n) ASCII-token DFA：精确 allowlisted envelope 才脱敏成功，fenced malformed/token split/token interruption 均 fail closed。最终精简修复删除 `unicodedata`、interruption flags 和重复分支，净删除 28 行状态复杂度。独立规格复审为 `SPEC PASS`，独立质量复审为 `READY`，Critical、Important、Minor 均无遗留；质量 reviewer 的 192 组 separator-position 组合探针全部通过。Task 4 定向边界测试为 60/60，严格完整回归为 287/287，`compileall` 与 `git diff --check` 通过。主要实现与收口提交为 `039abf0`、`1aeff8f`、`9b9afcd`、`4040cc3`、`ba2a8b2`、`4e8afa4`、`e4b51bb`、`af20c22`。
+
+尚未读取真实来源，也尚未把任何 native adapter 从 `blocked` 改为 `supported`。用户已提供精确 Wiki selector，并将授权范围限制为该页面的当前版本。Task 4 安全前置现已完成；Task 5 下一步只解析该 exact resource 的当前 revision，先验证 active user principal 与 content owner/authority，再捕获最小化脱敏 fixture。不会遍历链接、嵌入、附件、子文档、评论或历史版本。
 
 ### 产品里程碑
 
 - 四个 native adapters 的 content-authorized redacted fixtures 与版本兼容性验证。
 - DiscoveryGrant、MetadataGrant、ContentGrant、AuthorityAttestation 的持久化与 broker binding。
 - Lark trusted request broker 和本地 session descriptor broker。
-- 隔离 parser、deterministic redaction 与 ingestion persistence。
+- 隔离 Lark/Codex native parser 与 ingestion persistence（deterministic redaction 已完成）。
 - provenance/evidence/claim/capability knowledge model。
 - critical-question policy 与 skill compiler。
 - sealed evaluator、ApprovalSubject、VersionApproval。
 - export consent、purge、audit 与 stale-export repair。
 
-这些后续项均未开始实现；其中任何真实来源读取都需要精确 ContentGrant/AuthorityAttestation，不会因本地 validator 通过而自动获得授权。
+以上剩余项尚未完成；其中任何真实来源读取都需要精确 ContentGrant/AuthorityAttestation，不会因本地 validator 或 redactor 通过而自动获得授权。
 
 ## 安全与范围记录
 
