@@ -39,7 +39,7 @@ class RedactionTest(unittest.TestCase):
     def binding(self, **changes):
         fields = dict(context_id=digest("trust"), source_snapshot_id=digest("snapshot"),
                       native_locator_digest=digest("locator"), actor_id=digest("owner"),
-                      actor_resolution="verified")
+                      actor_kind="user", actor_resolution="verified-owner")
         return r.SpanBinding(**dict(fields, **changes))
 
     def run_text(self, text, *, key=b"k" * 32, context=None, binding=None, one_byte=False):
@@ -162,8 +162,8 @@ class RedactionTest(unittest.TestCase):
             ("content-grant", digest("run"), digest("grant")),
             ("authority-attestation", digest("grant"), digest("attestation"))])
         self.assertNotIn(digest("owner"), repr(span))
-        for changes in ({"actor_id": digest("someone")}, {"actor_resolution": "ambiguous"},
-                        {"actor_resolution": "unknown", "actor_id": None}):
+        for changes in ({"actor_id": digest("someone")}, {"actor_kind": "assistant", "actor_resolution": "native"},
+                        {"actor_resolution": "native"}, {"actor_resolution": "unresolved", "actor_id": None}):
             self.assertFalse(self.run_text("I am the owner", binding=self.binding(**changes))[0].claim_eligible)
         self.reject(lambda: self.run_text("hidden", binding=self.binding(context_id=digest("other"))))
         self.assertNotEqual(span.span_id, self.run_text("Hello", context=self.context(content_grant_digest=digest("other")))[0].span_id)
@@ -281,11 +281,25 @@ class RedactionTest(unittest.TestCase):
         self.reject(lambda: self.run_text("-----BEGIN PRIVATE KEY----- narrative", one_byte=True),
                     "invalid-private-key")
         for text in ("BEGIN rotating the private key", "BEGINNING PRIVATEKEY",
-                     "-----BEGIN KEY PRIVATE-----", "-----BEGIN PRİVATE KEY-----", "-----BEGIN PRIVATE KEY-----"):
+                     "-----BEGIN PRİVATE KEY-----", "-----BEGIN PRIVATE KEY-----"):
             with self.subTest(text=text):
                 self.assertEqual(self.run_text(text, one_byte=True)[0].text, text)
+        self.reject(lambda: self.run_text("-----BEGIN KEY PRIVATE-----", one_byte=True), "invalid-private-key")
         self.reject(lambda: self.run_text("-----BEGIN PRIVATE" + "-" * r.MAX_ARMOR_LINE_CHARS + "KEY-----"),
                     "invalid-private-key")
+
+    def test_split_private_key_delimiters_fail_closed(self):
+        payload = "SYNTHETIC_PRIVATE_MATERIAL"
+        for opening, closing in (("-----BEGIN PRIVATE", "KEY-----"),
+                                 ("\t-----BEGIN KEY", "PRIVATE-----"),
+                                 ("-----END PRIVATE", "KEY-----")):
+            with self.subTest(opening=opening):
+                error = self.reject(lambda: self.run_text(opening + "\r\n" + payload + "\r\n" + closing,
+                                                          one_byte=True), "invalid-private-key")
+                self.assertNotIn(payload, repr(error))
+        self.reject(lambda: self.run_text("-----BEGIN PRIVATE", one_byte=True), "invalid-private-key")
+        prose = "We begin private key rotation without a fenced delimiter."
+        self.assertEqual(self.run_text(prose, one_byte=True)[0].text, prose)
 
     def test_fenced_candidates_and_closed_bare_labels(self):
         payload = "synthetic-private-fenced-payload"
@@ -367,7 +381,8 @@ class RedactionTest(unittest.TestCase):
     def test_public_validator_rejects_mutated_results_and_subclasses(self):
         self.assertTrue(hasattr(r, "validate_redaction_result"), "defensive output validator is missing")
         def validate(result, **changes):
-            return r.validate_redaction_result(result, **dict(dict(context=self.context(), key=b"k" * 32), **changes))
+            return r.validate_redaction_result(result, **dict(dict(context=self.context(), key=b"k" * 32,
+                expected_bindings=tuple(self.binding() for _ in result)), **changes))
         result = self.run_text("password=synthetic-value")
         self.assertEqual(validate(result), result)
         for field, value in (("text", "password=private-secret"), ("claim_eligible", False),
@@ -402,15 +417,48 @@ class RedactionTest(unittest.TestCase):
                   r.SourceSpan(self.binding()), r.SourceChunk(b"second")]
         result = r.Redactor(self.context(), b"k" * 32).redact(events)
         self.assertEqual(validate(result), result)
-        self.reject(lambda: validate(result[::-1]))
-        copy = validate(result)
+
+    def test_actor_contract_and_validator_bind_external_stream(self):
+        class String(str):
+            pass
+        for changes in ({"actor_kind": "unknown"}, {"actor_kind": "user", "actor_resolution": "verified"},
+                        {"actor_kind": "assistant", "actor_resolution": "verified-owner"},
+                        {"actor_kind": True}, {"actor_resolution": String("native")}):
+            self.reject(lambda changes=changes: self.binding(**changes))
+        for changes in ({"actor_kind": "assistant", "actor_resolution": "native"}, {"actor_resolution": "native"},
+                        {"actor_id": digest("someone")}):
+            self.assertFalse(self.run_text("hello", binding=self.binding(**changes))[0].claim_eligible)
+        binding = self.binding()
+        object.__setattr__(binding, "actor_kind", "assistant")
+        self.reject(lambda: self.run_text("hello", binding=binding))
+        binding = self.binding()
+        object.__setattr__(binding, "actor_resolution", "native")
+        self.assertFalse(self.run_text("hello", binding=binding)[0].claim_eligible)
+        binding = self.binding()
+        object.__setattr__(binding, "actor_id", digest("someone"))
+        self.assertFalse(self.run_text("hello", binding=binding)[0].claim_eligible)
+        first = self.binding()
+        second = self.binding(native_locator_digest=digest("other-locator"), actor_kind="assistant",
+                              actor_resolution="native")
+        events = [r.SourceSpan(first), r.SourceChunk(b"first"), r.SourceSpan(second), r.SourceChunk(b"second")]
+        result = r.Redactor(self.context(), b"k" * 32).redact(events)
+        def validate(value, bindings):
+            return r.validate_redaction_result(value, context=self.context(), key=b"k" * 32,
+                                                expected_bindings=bindings)
+        self.assertEqual(validate(result, (first, second)), result)
+        for value, bindings in ((result, (second, first)), (result[:1], (first, second)),
+                                ((result[0], result[0]), (first, first)), (result, (first, first))):
+            self.reject(lambda value=value, bindings=bindings: validate(value, bindings))
+        self.reject(lambda: validate(result[::-1], (first, second)))
+        copy = validate(result, (first, second))
         object.__setattr__(result[0].derivations[0].to_node, "digest", digest("changed-after-validation"))
-        self.assertEqual(validate(copy), copy)
+        self.assertEqual(validate(copy, (first, second)), copy)
 
     def test_mutated_output_repr_and_nested_subclasses_remain_private(self):
         self.assertTrue(hasattr(r, "validate_redaction_result"))
         def validate(result):
-            return r.validate_redaction_result(result, context=self.context(), key=b"k" * 32)
+            return r.validate_redaction_result(result, context=self.context(), key=b"k" * 32,
+                                                expected_bindings=tuple(self.binding() for _ in result))
         result = self.run_text("hello")
         for target, name in ((result[0], "text"), (result[0].derivations[0], "relation"),
                              (result[0].derivations[0].to_node, "digest")):
@@ -521,7 +569,8 @@ class RedactionTest(unittest.TestCase):
              mock.patch.object(subprocess, "Popen", side_effect=AssertionError("process")):
             result = self.run_text("password=synthetic")
             self.assertIn("[redacted:", result[0].text)
-            self.assertEqual(r.validate_redaction_result(result, context=self.context(), key=b"k" * 32), result)
+            self.assertEqual(r.validate_redaction_result(result, context=self.context(), key=b"k" * 32,
+                                                         expected_bindings=(self.binding(),)), result)
 
 
 if __name__ == "__main__":

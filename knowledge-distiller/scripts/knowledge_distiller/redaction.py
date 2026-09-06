@@ -99,7 +99,7 @@ def _literals(values):
         _fail()
     total = 0
     for value in values:
-        if type(value) is not str or not value or len(value) > MAX_LITERAL_BYTES:
+        if type(value) is not str or not value:
             _fail()
         try:
             length = len(value.encode("utf-8"))
@@ -143,17 +143,21 @@ class SpanBinding(metaclass=_Closed):
     context_id: str
     source_snapshot_id: str
     native_locator_digest: str
+    actor_kind: str
     actor_id: Optional[str] = None
-    actor_resolution: str = "unknown"
+    actor_resolution: str = "unresolved"
 
     def __post_init__(self):
         for value in (self.context_id, self.source_snapshot_id, self.native_locator_digest):
             _digest(value)
         if self.actor_id is not None:
             _digest(self.actor_id)
-        if (type(self.actor_resolution) is not str
-                or self.actor_resolution not in ("verified", "ambiguous", "unknown")
-                or (self.actor_resolution == "verified" and self.actor_id is None)):
+        if (type(self.actor_kind) is not str
+                or self.actor_kind not in ("user", "assistant", "agent", "tool", "system", "external")
+                or type(self.actor_resolution) is not str
+                or self.actor_resolution not in ("verified-owner", "native", "deterministic", "unresolved")
+                or (self.actor_resolution == "verified-owner"
+                    and (self.actor_kind != "user" or self.actor_id is None))):
             _fail()
 
 
@@ -242,13 +246,16 @@ class RedactedSpan(metaclass=_Closed):
         object.__setattr__(self, "derivations", tuple(edges))
 
 
-def _span_payload(context, index, text, eligible, nodes):
+def _span_payload(context, index, text, eligible, nodes, binding):
     context_values = tuple(getattr(context, field.name) for field in fields(TrustContext))
-    return json.dumps((context_values, index, text, eligible, tuple((node.kind, node.digest) for node in nodes)),
+    binding_values = tuple(getattr(binding, field.name) for field in fields(SpanBinding))
+    return json.dumps((context_values, binding_values, index, text, eligible,
+                       tuple((node.kind, node.digest) for node in nodes)),
                       ensure_ascii=True, separators=(",", ":"))
 
 
-def validate_redaction_result(result, *, context: TrustContext, key: bytes) -> Tuple[RedactedSpan, ...]:
+def validate_redaction_result(result, *, context: TrustContext, key: bytes,
+                              expected_bindings: Tuple[SpanBinding, ...]) -> Tuple[RedactedSpan, ...]:
     """Return defensive copies authenticated against the external run context/key.
 
     No secret values are needed: the span MAC binds placeholder text and every
@@ -263,18 +270,29 @@ def validate_redaction_result(result, *, context: TrustContext, key: bytes) -> T
             _fail()
         if len(result) > MAX_SPANS:
             _fail("span-limit")
+        if type(expected_bindings) is not tuple or len(expected_bindings) != len(result):
+            _fail("invalid-context")
         validated = []
         output_bytes = 0
         for index, item in enumerate(result):
             span = _record(item, RedactedSpan)
+            binding = _record(expected_bindings[index], SpanBinding)
+            if binding.context_id != context.context_id:
+                _fail("invalid-context")
             output_bytes += len(span.text.encode("utf-8"))
             if output_bytes > MAX_OUTPUT_BYTES:
                 _fail("output-limit")
             nodes = tuple(edge.to_node for edge in span.derivations)
-            if tuple(node.digest for node in nodes[2:]) != (context.ingestion_run_id,
-                    context.content_grant_digest, context.authority_attestation_digest):
+            expected_nodes = tuple(ProvenanceNode(kind, digest) for kind, digest in zip(
+                _RELATIONS, (binding.native_locator_digest, binding.source_snapshot_id, context.ingestion_run_id,
+                             context.content_grant_digest, context.authority_attestation_digest)))
+            if nodes != expected_nodes:
                 _fail("invalid-context")
-            payload = _span_payload(context, index, span.text, span.claim_eligible, nodes)
+            eligible = (binding.actor_kind == "user" and binding.actor_resolution == "verified-owner"
+                        and binding.actor_id == context.owner_id)
+            if span.claim_eligible != eligible:
+                _fail("invalid-context")
+            payload = _span_payload(context, index, span.text, span.claim_eligible, expected_nodes, binding)
             if not hmac.compare_digest(span.span_id, _mac(key, "redacted-span", payload)):
                 _fail()
             validated.append(span)
@@ -316,6 +334,27 @@ def _armor_suspicious(text, start, end):
             left += 1
         return False
 
+    def marker_fragment(left, right):
+        while left < right:
+            for value in ("BEGIN", "END"):
+                if (word(left, value) and (left == 0 or not text[left - 1].isascii()
+                                            or not text[left - 1].isalnum())
+                        and (left + len(value) == right or not text[left + len(value)].isascii()
+                             or not text[left + len(value)].isalnum())):
+                    return True
+            left += 1
+        return False
+
+    def private_key_fragment(left, right):
+        while left < right:
+            if word(left, "PRIVATE") or word(left, "KEY"):
+                return True
+            left += 1
+        return False
+
+    def non_ascii_alphanumeric(left, right):
+        return any(not text[index].isascii() and text[index].isalnum() for index in range(left, right))
+
     # Either fence establishes a deliberate candidate boundary; do not repair
     # or depend on BEGIN/END spelling inside that boundary.
     left, right = start, end
@@ -330,7 +369,8 @@ def _armor_suspicious(text, start, end):
     while right > left and text[right - 1] == "-":
         right -= 1
     if left - fence_start >= 3 or fence_end - right >= 3:
-        return private_then_key(left, right)
+        return (not non_ascii_alphanumeric(left, right)
+                and (private_then_key(left, right) or (marker_fragment(left, right) and private_key_fragment(left, right))))
 
     # Bare candidates consume only horizontal indentation before exact BEGIN/END
     # and a closed label sequence. This leaves ordinary imperative prose outside
@@ -504,11 +544,12 @@ class Redactor:
         append(text[cursor:])
         redacted = "".join(pieces)
         context = self._context
-        eligible = binding.actor_resolution == "verified" and binding.actor_id == context.owner_id
+        eligible = (binding.actor_kind == "user" and binding.actor_resolution == "verified-owner"
+                    and binding.actor_id == context.owner_id)
         digests = (binding.native_locator_digest, binding.source_snapshot_id, context.ingestion_run_id,
                    context.content_grant_digest, context.authority_attestation_digest)
         nodes = tuple(ProvenanceNode(kind, digest) for kind, digest in zip(_RELATIONS, digests))
-        payload = _span_payload(context, index, redacted, eligible, nodes)
+        payload = _span_payload(context, index, redacted, eligible, nodes, binding)
         span_id = _mac(self._key, "redacted-span", payload)
         edges = tuple(DerivationEdge(relation, source, target) for relation, source, target
                       in zip(_RELATIONS, (ProvenanceNode("redacted-span", span_id),) + nodes[:-1], nodes))
