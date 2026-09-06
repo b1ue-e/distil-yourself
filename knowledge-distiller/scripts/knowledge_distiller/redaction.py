@@ -15,6 +15,13 @@ Caller establishes trust and supplies digest-only provenance and verified actor
 resolution. This module cannot verify the external attestation itself. Clearable
 buffers are wiped on success, failure, and cancellation; Python immutable copies,
 caller-owned inputs and traceback frames prevent guaranteed memory erasure.
+
+Frozen records prevent ordinary assignment, not object.__setattr__ tampering.
+Consumers must call validate_redaction_result with their external context and
+run key before using/serializing a retained result. It defensively copies strict
+records and authenticates all output text (including placeholders), typed edges,
+claim eligibility and ordering. HMAC identifiers explicitly use hmac-sha256;
+external SHA-256 digests use sha256. HMAC domains are versioned and type-separated.
 """
 
 from dataclasses import dataclass, fields
@@ -34,6 +41,7 @@ MAX_PRIVATE_KEY_CHARS = 16384
 MAX_LITERALS = 128
 MAX_LITERAL_BYTES = 512
 MAX_LITERAL_TOTAL_BYTES = 16384
+MAX_ARMOR_LINE_CHARS = 128
 
 _CODES = frozenset(("invalid-record", "invalid-context", "invalid-key", "invalid-event",
                     "invalid-utf8", "invalid-private-key", "secret-limit", "input-limit",
@@ -69,6 +77,21 @@ class _Closed(type):
 def _digest(value):
     if type(value) is not str or re.fullmatch(r"sha256:[0-9a-f]{64}", value) is None:
         _fail()
+
+
+def _mac_id(value):
+    if type(value) is not str or re.fullmatch(r"hmac-sha256:[0-9a-f]{64}", value) is None:
+        _fail()
+
+
+def _key(key):
+    if type(key) is not bytes or not 32 <= len(key) <= 64:
+        _fail("invalid-key")
+
+
+def _mac(key, domain, value):
+    message = b"knowledge-distiller:redaction:v1\x00" + domain.encode("ascii") + b"\x00" + value.encode("utf-8")
+    return "hmac-sha256:" + hmac.new(key, message, hashlib.sha256).hexdigest()
 
 
 def _literals(values):
@@ -161,22 +184,39 @@ class SourceChunk(metaclass=_Closed):
 
 
 _RELATIONS = ("native-locator", "source-snapshot", "ingestion-run", "content-grant", "authority-attestation")
+_NODE_KINDS = ("redacted-span",) + _RELATIONS
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, repr=False)
+class ProvenanceNode(metaclass=_Closed):
+    kind: str
+    digest: str
+
+    def __post_init__(self):
+        if type(self.kind) is not str or self.kind not in _NODE_KINDS:
+            _fail()
+        (_mac_id if self.kind == "redacted-span" else _digest)(self.digest)
+
+
+@dataclass(frozen=True, repr=False)
 class DerivationEdge(metaclass=_Closed):
     relation: str
-    source_id: str
-    target_id: str
+    from_node: ProvenanceNode
+    to_node: ProvenanceNode
 
     def __post_init__(self):
         if type(self.relation) is not str or self.relation not in _RELATIONS:
             _fail()
-        _digest(self.source_id)
-        _digest(self.target_id)
+        source = _record(self.from_node, ProvenanceNode)
+        target = _record(self.to_node, ProvenanceNode)
+        index = _RELATIONS.index(self.relation)
+        if source.kind != _NODE_KINDS[index] or target.kind != _NODE_KINDS[index + 1]:
+            _fail()
+        object.__setattr__(self, "from_node", source)
+        object.__setattr__(self, "to_node", target)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, repr=False)
 class RedactedSpan(metaclass=_Closed):
     span_id: str
     text: str
@@ -184,23 +224,71 @@ class RedactedSpan(metaclass=_Closed):
     derivations: Tuple[DerivationEdge, ...]
 
     def __post_init__(self):
-        _digest(self.span_id)
+        _mac_id(self.span_id)
         if type(self.text) is not str or type(self.claim_eligible) is not bool:
             _fail()
         if len(self.text) > MAX_OUTPUT_BYTES or len(self.text.encode("utf-8")) > MAX_OUTPUT_BYTES:
             _fail("output-limit")
         if type(self.derivations) is not tuple or len(self.derivations) != 5:
             _fail()
-        previous = self.span_id
+        previous = ProvenanceNode("redacted-span", self.span_id)
+        edges = []
         for relation, edge in zip(_RELATIONS, self.derivations):
-            _record(edge, DerivationEdge)
-            if edge.relation != relation or edge.source_id != previous:
+            edge = _record(edge, DerivationEdge)
+            if edge.relation != relation or edge.from_node != previous:
                 _fail()
-            previous = edge.target_id
+            edges.append(edge)
+            previous = edge.to_node
+        object.__setattr__(self, "derivations", tuple(edges))
 
 
-_PEM_START = re.compile(r"-----BEGIN ((?:RSA |EC |DSA |OPENSSH |ENCRYPTED )?PRIVATE KEY)-----")
-_PEM_END = re.compile(r"-----END [A-Z ]{0,64}PRIVATE KEY-----")
+def _span_payload(context, index, text, eligible, nodes):
+    context_values = tuple(getattr(context, field.name) for field in fields(TrustContext))
+    return json.dumps((context_values, index, text, eligible, tuple((node.kind, node.digest) for node in nodes)),
+                      ensure_ascii=True, separators=(",", ":"))
+
+
+def validate_redaction_result(result, *, context: TrustContext, key: bytes) -> Tuple[RedactedSpan, ...]:
+    """Return defensive copies authenticated against the external run context/key.
+
+    No secret values are needed: the span MAC binds placeholder text and every
+    output field. This validates integrity, not the truth of external attestations.
+    The caller must retain its run key externally; Redactor clears its own copy.
+    """
+    code = None
+    try:
+        context = _record(context, TrustContext)
+        _key(key)
+        if type(result) is not tuple:
+            _fail()
+        if len(result) > MAX_SPANS:
+            _fail("span-limit")
+        validated = []
+        output_bytes = 0
+        for index, item in enumerate(result):
+            span = _record(item, RedactedSpan)
+            output_bytes += len(span.text.encode("utf-8"))
+            if output_bytes > MAX_OUTPUT_BYTES:
+                _fail("output-limit")
+            nodes = tuple(edge.to_node for edge in span.derivations)
+            if tuple(node.digest for node in nodes[2:]) != (context.ingestion_run_id,
+                    context.content_grant_digest, context.authority_attestation_digest):
+                _fail("invalid-context")
+            payload = _span_payload(context, index, span.text, span.claim_eligible, nodes)
+            if not hmac.compare_digest(span.span_id, _mac(key, "redacted-span", payload)):
+                _fail()
+            validated.append(span)
+        return tuple(validated)
+    except RedactionError as error:
+        code = error.code
+    except Exception:
+        code = "invalid-record"
+    raise RedactionError(code)
+
+
+_PRIVATE_KEY_LABELS = frozenset(("PRIVATE KEY", "RSA PRIVATE KEY", "EC PRIVATE KEY", "DSA PRIVATE KEY",
+                               "OPENSSH PRIVATE KEY", "ENCRYPTED PRIVATE KEY", "PGP PRIVATE KEY BLOCK"))
+_ARMOR_DELIMITER = re.compile(r"-----(BEGIN|END) ([A-Z0-9 ]{1,64})-----")
 _ASSIGN = re.compile(r"(?i)(?<![^\W_])(?:password|passwd|pwd|secret|secret[_-]access[_-]key|client_secret|token|api[_-]?key|api[_-]?token|session(?:[_-]?token|[_-]?id)?|access[_-]?token|refresh[_-]?token)[\"']?[ \t]{0,32}[:=][ \t]{0,32}")
 _BEARER = re.compile(r"(?i)(?<!\w)bearer[ \t]{1,32}")
 _COOKIE = re.compile(r"(?im)^[ \t]{0,32}(?:set-cookie|cookie)[ \t]{0,32}:[ \t]{0,32}")
@@ -213,8 +301,7 @@ class Redactor:
 
     def __init__(self, context: TrustContext, key: bytes):
         self._context = _record(context, TrustContext)
-        if type(key) is not bytes or not 32 <= len(key) <= 64:
-            _fail("invalid-key")
+        _key(key)
         self._key = bytearray(key)
         self._buffer = bytearray()
         self._finalized = False
@@ -228,9 +315,6 @@ class Redactor:
             buffer.clear()
         self._context = None
         self._detections = 0
-
-    def _mac(self, domain, value):
-        return hmac.new(self._key, domain.encode() + b"\x00" + value.encode("utf-8"), hashlib.sha256).hexdigest()
 
     def _matches(self, text):
         matches = []
@@ -246,21 +330,37 @@ class Redactor:
                 return
             matches.append((start, end, kind, priority))
 
-        key_endings = set()
-        for match in _PEM_START.finditer(text):
-            ending = "-----END " + match.group(1) + "-----"
-            end = text.find(ending, match.end(), match.start() + MAX_PRIVATE_KEY_CHARS + 1)
-            if end < 0:
-                _fail("secret-limit" if len(text) - match.start() > MAX_PRIVATE_KEY_CHARS else "invalid-private-key")
-            add(match.start(), end + len(ending), "private-key", 0, MAX_PRIVATE_KEY_CHARS)
-            key_endings.add(end)
-        for match in _PEM_END.finditer(text):
-            if match.start() not in key_endings:
-                _fail("invalid-private-key")
-        # Unsupported/malformed private-key delimiters must not pass through.
-        for line in text.splitlines():
-            if "PRIVATE KEY-----" in line and "-----BEGIN" in line and _PEM_START.search(line) is None:
-                _fail("invalid-private-key")
+        # Single linear line walk. Only complete, allowlisted delimiter lines
+        # are accepted; any private-key-looking malformed armor fails closed.
+        # No nested blocks, cross-label endings or regex search over key bodies.
+        position = 0
+        active = None
+        while position < len(text):
+            end = text.find("\n", position)
+            end = len(text) if end < 0 else end
+            if active is not None and end - active[1] > MAX_PRIVATE_KEY_CHARS:
+                _fail("secret-limit")
+            line = text[position:end]
+            upper = line.upper()
+            if "PRIVATE KEY" in upper and "-" in line and ("---" in line or "BEGIN" in upper or "END" in upper):
+                if len(line) > MAX_ARMOR_LINE_CHARS:
+                    _fail("invalid-private-key")
+                delimiter = _ARMOR_DELIMITER.fullmatch(line.strip(" \t\r"))
+                if delimiter is None or delimiter.group(2) not in _PRIVATE_KEY_LABELS:
+                    _fail("invalid-private-key")
+                action, label = delimiter.groups()
+                if action == "BEGIN":
+                    if active is not None:
+                        _fail("invalid-private-key")
+                    active = (label, position)
+                else:
+                    if active is None or active[0] != label:
+                        _fail("invalid-private-key")
+                    add(active[1], end, "private-key", 0, MAX_PRIVATE_KEY_CHARS)
+                    active = None
+            position = end + 1
+        if active is not None:
+            _fail("invalid-private-key")
         for pattern, kind, priority in ((_COOKIE, "cookie", 1), (_ASSIGN, "credential", 2), (_BEARER, "credential", 2)):
             for match in pattern.finditer(text):
                 start = match.end()
@@ -319,18 +419,19 @@ class Redactor:
         cursor = 0
         for start, end, kind, _ in self._matches(text):
             append(text[cursor:start])
-            append("[redacted:" + kind + ":" + self._mac("placeholder", text[start:end]) + "]")
+            append("[redacted:" + kind + ":" + _mac(self._key, "placeholder:" + kind, text[start:end]) + "]")
             cursor = end
         append(text[cursor:])
         redacted = "".join(pieces)
         context = self._context
         eligible = binding.actor_resolution == "verified" and binding.actor_id == context.owner_id
-        nodes = (binding.native_locator_digest, binding.source_snapshot_id, context.ingestion_run_id,
-                 context.content_grant_digest, context.authority_attestation_digest)
-        payload = json.dumps((context.context_id, index, redacted, eligible, nodes), ensure_ascii=True, separators=(",", ":"))
-        span_id = "sha256:" + self._mac("redacted-span", payload)
+        digests = (binding.native_locator_digest, binding.source_snapshot_id, context.ingestion_run_id,
+                   context.content_grant_digest, context.authority_attestation_digest)
+        nodes = tuple(ProvenanceNode(kind, digest) for kind, digest in zip(_RELATIONS, digests))
+        payload = _span_payload(context, index, redacted, eligible, nodes)
+        span_id = _mac(self._key, "redacted-span", payload)
         edges = tuple(DerivationEdge(relation, source, target) for relation, source, target
-                      in zip(_RELATIONS, (span_id,) + nodes[:-1], nodes))
+                      in zip(_RELATIONS, (ProvenanceNode("redacted-span", span_id),) + nodes[:-1], nodes))
         for position in range(len(self._buffer)):
             self._buffer[position] = 0
         self._buffer.clear()

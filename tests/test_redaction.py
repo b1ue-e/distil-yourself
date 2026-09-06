@@ -1,9 +1,11 @@
 """Synthetic tests for the deterministic, offline pre-ingestion boundary."""
 import dataclasses
 import hashlib
+import hmac
 import importlib
 import os
 from pathlib import Path
+import re
 import socket
 import subprocess
 import sys
@@ -102,10 +104,12 @@ class RedactionTest(unittest.TestCase):
         self.assertNotEqual(out, self.run_text(text, key=b"z" * 32)[0].text)
         self.assertNotIn(hashlib.sha256(b"alice@example.org").hexdigest(), out)
 
-    def test_shared_secret_id_across_detector_types_and_partial_overlaps(self):
+    def test_type_separated_secret_ids_and_partial_overlaps(self):
         out = self.run_text("password=alice@example.org alice@example.org")[0].text
-        placeholders = __import__("re").findall(r"\[redacted:[a-z-]+:([a-f0-9]{64})\]", out)
-        self.assertEqual(placeholders[0], placeholders[1])
+        placeholders = re.findall(r"\[redacted:[a-z-]+:(?:hmac-sha256:)?([a-f0-9]{64})\]", out)
+        self.assertNotEqual(placeholders[0], placeholders[1])
+        self.assertEqual(placeholders[0], hmac.new(b"k" * 32,
+            b"knowledge-distiller:redaction:v1\x00placeholder:credential\x00alice@example.org", hashlib.sha256).hexdigest())
         context = self.context(participant_names=("abc def", "def ghi"), participant_ids=())
         out = self.run_text("abc def ghi", context=context)[0].text
         self.assertEqual(out.count("[redacted:"), 1)
@@ -120,7 +124,7 @@ class RedactionTest(unittest.TestCase):
 
     def test_derivation_chain_mutations_fail_closed(self):
         span = self.run_text("hello")[0]
-        edge = dataclasses.replace(span.derivations[1], source_id=digest("wrong"))
+        edge = dataclasses.replace(span.derivations[1], from_node=r.ProvenanceNode("native-locator", digest("wrong")))
         self.reject(lambda: dataclasses.replace(span, derivations=(span.derivations[0], edge) + span.derivations[2:]))
         self.reject(lambda: dataclasses.replace(span, claim_eligible=1))
         self.reject(lambda: dataclasses.replace(span, derivations=list(span.derivations)))
@@ -150,7 +154,7 @@ class RedactionTest(unittest.TestCase):
         span = self.run_text("Hello")[0]
         self.assertTrue(span.claim_eligible)
         edges = span.derivations
-        self.assertEqual([(e.relation, e.source_id, e.target_id) for e in edges], [
+        self.assertEqual([(e.relation, e.from_node.digest, e.to_node.digest) for e in edges], [
             ("native-locator", span.span_id, digest("locator")),
             ("source-snapshot", digest("locator"), digest("snapshot")),
             ("ingestion-run", digest("snapshot"), digest("run")),
@@ -162,6 +166,113 @@ class RedactionTest(unittest.TestCase):
             self.assertFalse(self.run_text("I am the owner", binding=self.binding(**changes))[0].claim_eligible)
         self.reject(lambda: self.run_text("hidden", binding=self.binding(context_id=digest("other"))))
         self.assertNotEqual(span.span_id, self.run_text("Hello", context=self.context(content_grant_digest=digest("other")))[0].span_id)
+
+    def test_all_supported_private_key_armor_and_rejected_variants(self):
+        labels = ("PRIVATE KEY", "RSA PRIVATE KEY", "EC PRIVATE KEY", "DSA PRIVATE KEY",
+                  "OPENSSH PRIVATE KEY", "ENCRYPTED PRIVATE KEY", "PGP PRIVATE KEY BLOCK")
+        for label in labels:
+            with self.subTest(label=label):
+                armor = "-----BEGIN " + label + "-----\nprivate-synthetic-data\n-----END " + label + "-----"
+                out = self.run_text(armor, one_byte=True)[0]
+                self.assertNotIn("private-synthetic-data", repr(dataclasses.asdict(out)))
+                self.assertNotIn(label, repr(out))
+                self.assertEqual(out.text.count("[redacted:private-key:"), 1)
+                self.assertEqual(out, self.run_text(armor)[0])
+        invalid = (
+            "-----BEGIN PGP PRIVATE KEY BLOCK-----\nprivate-synthetic-data\n-----END PRIVATE KEY-----",
+            "-----END PGP PRIVATE KEY BLOCK-----", "-----BEGIN PGP PRIVATE KEY BLOCK-----",
+            "-----BEGIN FOO PRIVATE KEY-----\nprivate-synthetic-data\n-----END FOO PRIVATE KEY-----",
+            "-----BEGIN PGP PRIVATE KEY BLOCK----", "-----END PGP PRIVATE KEY BLOCK------",
+            "-----BEGI PGP PRIVATE KEY BLOCK-----", "-----FINISH RSA PRIVATE KEY-----",
+            "prefix-----BEGIN PRIVATE KEY-----", "-----BEGIN " + "X" * 200 + " PRIVATE KEY-----",
+            "-----BEGIN PRIVATE KEY-----\n-----BEGIN RSA PRIVATE KEY-----\n-----END RSA PRIVATE KEY-----\n-----END PRIVATE KEY-----",
+        )
+        for armor in invalid:
+            with self.subTest(armor=armor):
+                error = self.reject(lambda: self.run_text(armor, one_byte=True), "invalid-private-key")
+                self.assertNotIn("private-synthetic-data", repr(error))
+        prefix, suffix = "-----BEGIN PGP PRIVATE KEY BLOCK-----\n", "\n-----END PGP PRIVATE KEY BLOCK-----"
+        armor = prefix + "x" * (r.MAX_PRIVATE_KEY_CHARS - len(prefix) - len(suffix)) + suffix
+        self.run_text(armor, one_byte=True)
+        self.reject(lambda: self.run_text(armor.replace("\nx", "\nxx", 1), one_byte=True), "secret-limit")
+
+    def test_typed_provenance_rejects_digest_preserving_kind_swaps(self):
+        self.assertTrue(hasattr(r, "ProvenanceNode"), "typed provenance boundary is missing")
+        span = self.run_text("hello")[0]
+        self.assertRegex(span.span_id, r"^hmac-sha256:[0-9a-f]{64}$")
+        self.assertEqual(span.derivations[0].from_node.kind, "redacted-span")
+        for edge in span.derivations:
+            with self.subTest(relation=edge.relation):
+                swapped = r.ProvenanceNode("authority-attestation" if edge.to_node.kind != "authority-attestation" else "content-grant", edge.to_node.digest)
+                self.reject(lambda: dataclasses.replace(edge, to_node=swapped))
+        self.reject(lambda: r.ProvenanceNode("redacted-span", digest("fake")))
+        self.reject(lambda: r.ProvenanceNode("native-locator", span.span_id))
+        self.reject(lambda: r.ProvenanceNode("unknown", digest("fake")))
+
+    def test_public_validator_rejects_mutated_results_and_subclasses(self):
+        self.assertTrue(hasattr(r, "validate_redaction_result"), "defensive output validator is missing")
+        def validate(result, **changes):
+            return r.validate_redaction_result(result, **dict(dict(context=self.context(), key=b"k" * 32), **changes))
+        result = self.run_text("password=synthetic-value")
+        self.assertEqual(validate(result), result)
+        for field, value in (("text", "password=private-secret"), ("claim_eligible", False),
+                             ("span_id", "hmac-sha256:" + "a" * 64), ("extra", "private-secret")):
+            with self.subTest(field=field):
+                result = self.run_text("password=synthetic-value")
+                object.__setattr__(result[0], field, value)
+                error = self.reject(lambda: validate(result))
+                self.assertNotIn("private-secret", repr(error))
+        result = self.run_text("password=synthetic-value")
+        object.__setattr__(result[0], "text", result[0].text.replace("credential", "email"))
+        self.reject(lambda: validate(result))
+        for field, value in (("kind", "source-snapshot"), ("digest", digest("substitute")), ("extra", "private-secret")):
+            result = self.run_text("hello")
+            object.__setattr__(result[0].derivations[0].to_node, field, value)
+            self.reject(lambda: validate(result))
+        class SpanSubclass(r.RedactedSpan):
+            pass
+        class StringSubclass(str):
+            pass
+        result = self.run_text("hello")
+        self.reject(lambda: validate((SpanSubclass(**vars(result[0])),)))
+        object.__setattr__(result[0], "text", StringSubclass("hello"))
+        self.reject(lambda: validate(result))
+        result = self.run_text("hello")
+        self.reject(lambda: validate(list(result)))
+        self.reject(lambda: validate(result, key=b"z" * 32))
+        self.reject(lambda: validate(result, context=self.context(content_grant_digest=digest("other"))))
+        self.reject(lambda: validate(result, context=self.context(owner_id=digest("other"))))
+        self.reject(lambda: validate(result, context=self.context(allowlist=("new-exception",))))
+        events = [r.SourceSpan(self.binding()), r.SourceChunk(b"first"),
+                  r.SourceSpan(self.binding()), r.SourceChunk(b"second")]
+        result = r.Redactor(self.context(), b"k" * 32).redact(events)
+        self.assertEqual(validate(result), result)
+        self.reject(lambda: validate(result[::-1]))
+        copy = validate(result)
+        object.__setattr__(result[0].derivations[0].to_node, "digest", digest("changed-after-validation"))
+        self.assertEqual(validate(copy), copy)
+
+    def test_mutated_output_repr_and_nested_subclasses_remain_private(self):
+        self.assertTrue(hasattr(r, "validate_redaction_result"))
+        def validate(result):
+            return r.validate_redaction_result(result, context=self.context(), key=b"k" * 32)
+        result = self.run_text("hello")
+        for target, name in ((result[0], "text"), (result[0].derivations[0], "relation"),
+                             (result[0].derivations[0].to_node, "digest")):
+            object.__setattr__(target, name, "private-secret")
+            self.assertNotIn("private-secret", repr(target))
+            self.reject(lambda: validate(result))
+        class NodeSubclass(r.ProvenanceNode):
+            pass
+        class EdgeSubclass(r.DerivationEdge):
+            pass
+        for cls, level in ((NodeSubclass, "node"), (EdgeSubclass, "edge")):
+            result = self.run_text("hello")
+            if level == "node":
+                object.__setattr__(result[0].derivations[0], "to_node", cls(**vars(result[0].derivations[0].to_node)))
+            else:
+                object.__setattr__(result[0], "derivations", (cls(**vars(result[0].derivations[0])),) + result[0].derivations[1:])
+            self.reject(lambda: validate(result))
 
     def test_runtime_types_closed_records_and_mutation(self):
         class String(str):
@@ -253,7 +364,9 @@ class RedactionTest(unittest.TestCase):
              mock.patch.object(os, "getenv", side_effect=AssertionError("environment")), \
              mock.patch.object(socket, "socket", side_effect=AssertionError("network")), \
              mock.patch.object(subprocess, "Popen", side_effect=AssertionError("process")):
-            self.assertIn("[redacted:", self.run_text("password=synthetic")[0].text)
+            result = self.run_text("password=synthetic")
+            self.assertIn("[redacted:", result[0].text)
+            self.assertEqual(r.validate_redaction_result(result, context=self.context(), key=b"k" * 32), result)
 
 
 if __name__ == "__main__":
