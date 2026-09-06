@@ -117,6 +117,83 @@ class SourceIOTest(unittest.TestCase):
                 self.reject(self.read, "source-file-unavailable" if operation == "read" else "unsafe-source-file")
                 self.assertEqual(opened.call_count, close.call_count)
 
+    def test_interrupted_directory_handoffs_close_owned_fds_without_reclosing_reused_fd(self):
+        # A Python signal can raise after close(2) has consumed the descriptor.
+        # Reusing its number before raising exposes an unsafe cleanup retry.
+        for handoff in ("child-directory", "source-file"):
+            opened = set()
+            replacements = []
+            original_open, original_close = os.open, os.close
+            interrupt = KeyboardInterrupt("synthetic-interrupt")
+            armed = False
+            interrupted = False
+
+            def record_open(name, flags, **kwargs):
+                nonlocal armed
+                descriptor = original_open(name, flags, **kwargs)
+                opened.add(descriptor)
+                if handoff == "child-directory":
+                    armed = len(opened) == 2
+                else:
+                    armed = not flags & os.O_DIRECTORY
+                return descriptor
+
+            def interrupt_close(descriptor):
+                nonlocal interrupted
+                original_close(descriptor)
+                opened.remove(descriptor)
+                if armed and not interrupted:
+                    interrupted = True
+                    replacement = original_open(str(self.path), os.O_RDONLY)
+                    replacements.append(replacement)
+                    self.assertEqual(replacement, descriptor)
+                    raise interrupt
+
+            try:
+                with mock.patch.object(os, "open", side_effect=record_open), mock.patch.object(os, "close", side_effect=interrupt_close):
+                    try:
+                        self.read()
+                    except BaseException as error:
+                        self.assertIs(error, interrupt)
+                    else:
+                        self.fail("interruption must propagate")
+                self.assertTrue(interrupted)
+                self.assertEqual(opened, set(), "owned file descriptors leaked")
+                self.assertEqual(os.read(replacements[0], 6), b"abcdef")
+                self.assertEqual(self.read(), b"abcdef")
+            finally:
+                # Clean even the intentionally reproduced RED leak.
+                for descriptor in opened | set(replacements):
+                    try:
+                        original_close(descriptor)
+                    except OSError:
+                        pass
+
+    def test_interruption_during_file_close_propagates_without_fd_growth(self):
+        original_open, original_close = os.open, os.close
+        target = None
+        interrupt = KeyboardInterrupt("synthetic-file-close")
+
+        def record_open(name, flags, **kwargs):
+            nonlocal target
+            descriptor = original_open(name, flags, **kwargs)
+            if not flags & os.O_DIRECTORY:
+                target = descriptor
+            return descriptor
+
+        def interrupt_close(descriptor):
+            original_close(descriptor)
+            if descriptor == target:
+                raise interrupt
+
+        with mock.patch.object(os, "open", side_effect=record_open), mock.patch.object(os, "close", side_effect=interrupt_close):
+            with self.assertRaises(KeyboardInterrupt) as caught:
+                self.read()
+        self.assertIs(caught.exception, interrupt)
+        with self.assertRaises(OSError):
+            os.fstat(target)
+        self.assertEqual(self.read(), b"abcdef")
+
     def test_closed_prefix_excludes_existing_and_mid_read_appends(self):
         original_read = os.read
         appended = False

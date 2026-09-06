@@ -53,27 +53,55 @@ def _open_source(path: str) -> int:
         directory = os.open(root, directory_flags)
         for component in components[:-1]:
             child = os.open(component, directory_flags, dir_fd=directory)
+            previous_directory = directory
+            directory = None
             try:
-                os.close(directory)
-            except OSError:
-                os.close(child)
+                os.close(previous_directory)
+            except BaseException:
+                previous_child = child
+                child = None
+                try:
+                    os.close(previous_child)
+                except BaseException:
+                    pass
                 raise
             directory = child
         file_flags = os.O_RDONLY | os.O_NOFOLLOW
         file_flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NONBLOCK", 0)
         descriptor = os.open(components[-1], file_flags, dir_fd=directory)
-        return descriptor
+        previous_directory = directory
+        directory = None
+        try:
+            os.close(previous_directory)
+        except BaseException:
+            previous_descriptor = descriptor
+            descriptor = None
+            try:
+                os.close(previous_descriptor)
+            except BaseException:
+                pass
+            raise
+        result = descriptor
+        descriptor = None
+        return result
     except FileNotFoundError:
         raise SourceIOError("source-file-unavailable") from None
     except (OSError, TypeError, ValueError):
         raise SourceIOError("unsafe-source-file") from None
     finally:
         if directory is not None:
+            previous_directory = directory
+            directory = None
             try:
-                os.close(directory)
+                os.close(previous_directory)
             except OSError:
                 if descriptor is not None:
-                    os.close(descriptor)
+                    previous_descriptor = descriptor
+                    descriptor = None
+                    try:
+                        os.close(previous_descriptor)
+                    except BaseException:
+                        pass
                 raise SourceIOError("unsafe-source-file") from None
 
 
