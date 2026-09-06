@@ -369,7 +369,7 @@ def _armor_matches(text, add):
     private_ready = marker_pending = False
 
     def advance(index, value, char):
-        if char in " \t\r\n-_\/":
+        if char in " \t\r\n-_/":
             return index
         if char == value[index] or char == value[index].lower():
             return index + 1
