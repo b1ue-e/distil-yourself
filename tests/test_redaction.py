@@ -3,6 +3,7 @@ import dataclasses
 import hashlib
 import hmac
 import importlib
+import itertools
 import os
 from pathlib import Path
 import re
@@ -221,7 +222,7 @@ class RedactionTest(unittest.TestCase):
                     for diagnostic in (str(error), repr(error), repr(error.args), repr(vars(error))):
                         self.assertNotIn(payload, diagnostic)
         for marker in ("BEGIN", "END"):
-            for label in ("PRIVATEKEY", "PRIVATEKEYBLOCK", "PRIVATE_KEY", "PRIVATE\tKEY", "PGP PRIVATE-KEY BLOCK"):
+            for label in ("PRIVATEKEY", "PRIVATE_KEY", "PRIVATE\tKEY", "PGP PRIVATE-KEY BLOCK"):
                 self.reject(lambda: self.run_text(marker + " " + label, one_byte=True), "invalid-private-key")
         for prefix in ("BEGIN " + " " * r.MAX_ARMOR_LINE_CHARS,):
             self.reject(lambda: self.run_text(prefix + "PRIVATE_KEY", one_byte=True), "invalid-private-key")
@@ -307,7 +308,7 @@ class RedactionTest(unittest.TestCase):
             with self.subTest(orphan=orphan):
                 self.reject(lambda: self.run_text(orphan, one_byte=True), "invalid-private-key")
         for prose in ("BEGIN rotating PRIVATE KEY", "BEGIN rotating the private key",
-                      "BEGIN PGP PRIVATE KEY", "We recommend --- PRIVATE KEY --- before rollout.",
+                      "BEGIN PGP PRIVATE KEY", "BEGIN PRIVATEKEYBLOCK", "We recommend --- PRIVATE KEY --- before rollout.",
                       "--- PRIVATE KEY ---", "--- KEY PRIVATE ---"):
             with self.subTest(prose=prose):
                 self.assertEqual(self.run_text(prose, one_byte=True)[0].text, prose)
@@ -347,14 +348,21 @@ class RedactionTest(unittest.TestCase):
             with self.subTest(text=text):
                 self.reject(lambda: self.run_text(text, one_byte=True), "invalid-event")
 
-    def test_compact_bare_pgp_private_key_variants_fail_closed(self):
-        payload = "synthetic-private-pgp-payload"
-        for label in ("PGP PRIVATEKEY BLOCK", "PGP PRIVATE KEYBLOCK", "PGP PRIVATEKEYBLOCK"):
-            with self.subTest(label=label):
-                text = "BEGIN " + label + "\r\n" + payload + "\r\nEND " + label
-                error = self.reject(lambda: self.run_text(text, one_byte=True), "invalid-private-key")
-                self.assertNotIn(payload, repr(error))
-                self.reject(lambda: self.run_text("BEGIN " + label, one_byte=True), "invalid-private-key")
+    def test_bare_private_key_labels_canonicalize_permitted_separators(self):
+        payload = "synthetic-private-canonical-payload"
+        separators = ("", " ", "\t", "-", "_", "/")
+        for label in sorted(r._PRIVATE_KEY_LABELS):
+            words = label.split()
+            for gaps in itertools.product(separators, repeat=len(words) - 1):
+                compact = "".join(word + (gaps[index] if index < len(gaps) else "")
+                                  for index, word in enumerate(words))
+                with self.subTest(label=label, compact=compact):
+                    for marker in ("BEGIN", "END"):
+                        self.reject(lambda marker=marker: self.run_text(marker + " " + compact, one_byte=True),
+                                    "invalid-private-key")
+                    text = "BEGIN " + compact + "\r\n" + payload + "\r\nEND " + compact
+                    error = self.reject(lambda: self.run_text(text, one_byte=True), "invalid-private-key")
+                    self.assertNotIn(payload, repr(error))
 
     def test_public_validator_rejects_mutated_results_and_subclasses(self):
         self.assertTrue(hasattr(r, "validate_redaction_result"), "defensive output validator is missing")

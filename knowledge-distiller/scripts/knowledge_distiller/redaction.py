@@ -288,6 +288,8 @@ def validate_redaction_result(result, *, context: TrustContext, key: bytes) -> T
 
 _PRIVATE_KEY_LABELS = frozenset(("PRIVATE KEY", "RSA PRIVATE KEY", "EC PRIVATE KEY", "DSA PRIVATE KEY",
                                "OPENSSH PRIVATE KEY", "ENCRYPTED PRIVATE KEY", "PGP PRIVATE KEY BLOCK"))
+_PRIVATE_KEY_COMPACTS = frozenset(label.replace(" ", "") for label in _PRIVATE_KEY_LABELS)
+_MAX_PRIVATE_KEY_COMPACT_CHARS = max(len(label) for label in _PRIVATE_KEY_COMPACTS)
 _ARMOR_DELIMITER = re.compile(r"-----(BEGIN|END) ([A-Z0-9 ]{1,64})-----")
 _ASSIGN = re.compile(r"(?i)(?<![^\W_])(?:password|passwd|pwd|secret|secret[_-]access[_-]key|client_secret|token|api[_-]?key|api[_-]?token|session(?:[_-]?token|[_-]?id)?|access[_-]?token|refresh[_-]?token)[\"']?[ \t]*[:=][ \t]*")
 _BEARER = re.compile(r"(?i)(?<!\w)bearer[ \t]+")
@@ -344,38 +346,16 @@ def _armor_suspicious(text, start, end):
         return False
     if marker_end == end or text[marker_end].isascii() and text[marker_end].isalnum():
         return False
-    tokens = []
-    left = marker_end
-    while left < end:
-        while left < end and not (text[left].isascii() and text[left].isalnum()):
-            left += 1
-        token_start = left
-        while left < end and text[left].isascii() and text[left].isalnum():
-            left += 1
-        if token_start == left:
-            continue
-        if left - token_start > MAX_ARMOR_LINE_CHARS or len(tokens) == 4:
+    compact = []
+    for index in range(marker_end, end):
+        char = text[index]
+        if char.isascii() and char.isalnum():
+            if len(compact) == _MAX_PRIVATE_KEY_COMPACT_CHARS:
+                return False
+            compact.append(char.upper())
+        elif not (char.isspace() or char in "-_/"):
             return False
-        tokens.append((token_start, left))
-
-    def token(index, value):
-        token_start, token_end = tokens[index]
-        return token_end - token_start == len(value) and word(token_start, value)
-
-    if len(tokens) == 1:
-        return token(0, "PRIVATEKEY") or token(0, "PRIVATEKEYBLOCK")
-    if len(tokens) == 2:
-        return ((token(0, "PRIVATE") and token(1, "KEY"))
-                or (token(0, "PGP") and token(1, "PRIVATEKEYBLOCK"))
-                or (token(0, "RSA") or token(0, "EC") or token(0, "DSA")
-                    or token(0, "OPENSSH") or token(0, "ENCRYPTED")) and token(1, "PRIVATEKEY"))
-    if len(tokens) == 3:
-        return (((token(0, "RSA") or token(0, "EC") or token(0, "DSA")
-                  or token(0, "OPENSSH") or token(0, "ENCRYPTED"))
-                 and token(1, "PRIVATE") and token(2, "KEY"))
-                or (token(0, "PGP") and ((token(1, "PRIVATEKEY") and token(2, "BLOCK"))
-                                           or (token(1, "PRIVATE") and token(2, "KEYBLOCK")))))
-    return len(tokens) == 4 and token(0, "PGP") and token(1, "PRIVATE") and token(2, "KEY") and token(3, "BLOCK")
+    return "".join(compact) in _PRIVATE_KEY_COMPACTS
 
 
 class Redactor:
