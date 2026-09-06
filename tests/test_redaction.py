@@ -162,9 +162,11 @@ class RedactionTest(unittest.TestCase):
             ("content-grant", digest("run"), digest("grant")),
             ("authority-attestation", digest("grant"), digest("attestation"))])
         self.assertNotIn(digest("owner"), repr(span))
-        for changes in ({"actor_id": digest("someone")}, {"actor_kind": "assistant", "actor_resolution": "native"},
+        for changes in ({"actor_kind": "assistant", "actor_resolution": "native"},
                         {"actor_resolution": "native"}, {"actor_resolution": "unresolved", "actor_id": None}):
             self.assertFalse(self.run_text("I am the owner", binding=self.binding(**changes))[0].claim_eligible)
+        self.reject(lambda: self.run_text("I am not the owner", binding=self.binding(actor_id=digest("someone"))),
+                    "invalid-context")
         self.reject(lambda: self.run_text("hidden", binding=self.binding(context_id=digest("other"))))
         self.assertNotEqual(span.span_id, self.run_text("Hello", context=self.context(content_grant_digest=digest("other")))[0].span_id)
 
@@ -297,6 +299,16 @@ class RedactionTest(unittest.TestCase):
                 error = self.reject(lambda: self.run_text(opening + "\r\n" + payload + "\r\n" + closing,
                                                           one_byte=True), "invalid-private-key")
                 self.assertNotIn(payload, repr(error))
+        for delimiter in ("-----BEGIN\nPRIVATE\nKEY-----",
+                          "-----BEGIN PRIV\nATE KEY-----",
+                          "-----END\r\nPRIVATE\r\nKEY-----",
+                          "-----END PRIV\r\nATE KEY-----",
+                          "-----BEGIN\r\nPRIVATE",
+                          "-----END\nKEY"):
+            with self.subTest(delimiter=delimiter):
+                error = self.reject(lambda delimiter=delimiter: self.run_text(
+                    delimiter + "\r\n" + payload, one_byte=True), "invalid-private-key")
+                self.assertNotIn(payload, repr(error))
         self.reject(lambda: self.run_text("-----BEGIN PRIVATE", one_byte=True), "invalid-private-key")
         prose = "We begin private key rotation without a fenced delimiter."
         self.assertEqual(self.run_text(prose, one_byte=True)[0].text, prose)
@@ -323,7 +335,7 @@ class RedactionTest(unittest.TestCase):
                 self.reject(lambda: self.run_text(orphan, one_byte=True), "invalid-private-key")
         for prose in ("BEGIN rotating PRIVATE KEY", "BEGIN rotating the private key",
                       "BEGIN PGP PRIVATE KEY", "BEGIN PRIVATEKEYBLOCK", "We recommend --- PRIVATE KEY --- before rollout.",
-                      "--- PRIVATE KEY ---", "--- KEY PRIVATE ---"):
+                      "--- PRIVATE KEY ---", "--- KEY PRIVATE ---", "-BEGIN PRIVATE KEY", "--BEGIN PRIVATE KEY"):
             with self.subTest(prose=prose):
                 self.assertEqual(self.run_text(prose, one_byte=True)[0].text, prose)
         # A fence on either side creates a deliberate security candidate boundary.
@@ -425,8 +437,7 @@ class RedactionTest(unittest.TestCase):
                         {"actor_kind": "assistant", "actor_resolution": "verified-owner"},
                         {"actor_kind": True}, {"actor_resolution": String("native")}):
             self.reject(lambda changes=changes: self.binding(**changes))
-        for changes in ({"actor_kind": "assistant", "actor_resolution": "native"}, {"actor_resolution": "native"},
-                        {"actor_id": digest("someone")}):
+        for changes in ({"actor_kind": "assistant", "actor_resolution": "native"}, {"actor_resolution": "native"}):
             self.assertFalse(self.run_text("hello", binding=self.binding(**changes))[0].claim_eligible)
         binding = self.binding()
         object.__setattr__(binding, "actor_kind", "assistant")
@@ -436,7 +447,11 @@ class RedactionTest(unittest.TestCase):
         self.assertFalse(self.run_text("hello", binding=binding)[0].claim_eligible)
         binding = self.binding()
         object.__setattr__(binding, "actor_id", digest("someone"))
-        self.assertFalse(self.run_text("hello", binding=binding)[0].claim_eligible)
+        self.reject(lambda: self.run_text("hello", binding=binding), "invalid-context")
+        result = self.run_text("hello")
+        self.reject(lambda: r.validate_redaction_result(
+            result, context=self.context(), key=b"k" * 32,
+            expected_bindings=(self.binding(actor_id=digest("someone")),)), "invalid-context")
         first = self.binding()
         second = self.binding(native_locator_digest=digest("other-locator"), actor_kind="assistant",
                               actor_resolution="native")

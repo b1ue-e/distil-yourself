@@ -279,6 +279,9 @@ def validate_redaction_result(result, *, context: TrustContext, key: bytes,
             binding = _record(expected_bindings[index], SpanBinding)
             if binding.context_id != context.context_id:
                 _fail("invalid-context")
+            if (binding.actor_resolution == "verified-owner"
+                    and (binding.actor_kind != "user" or binding.actor_id != context.owner_id)):
+                _fail("invalid-context")
             output_bytes += len(span.text.encode("utf-8"))
             if output_bytes > MAX_OUTPUT_BYTES:
                 _fail("output-limit")
@@ -316,61 +319,11 @@ _EMAIL = re.compile(r"(?<![\w.+-])[\w.+-]{1,128}@[\w-]{1,128}(?:\.[\w-]{1,63}){1
 _PHONE = re.compile(r"(?<!\w)\+?[0-9][0-9 ()-]{5,30}[0-9](?!\w)")
 
 
-def _armor_suspicious(text, start, end):
-    """Recognize finite fenced and bare private-key candidates without copies."""
+def _bare_armor_suspicious(text, start, end):
+    """Recognize only the closed, unfenced BEGIN/END label grammar."""
     def word(index, value):
-        if index + len(value) > end:
-            return False
-        return all(text[index + offset] in (char, char.lower())
-                   for offset, char in enumerate(value))
-
-    def private_then_key(left, right):
-        private = False
-        while left < right:
-            if private and word(left, "KEY"):
-                return True
-            if word(left, "PRIVATE"):
-                private = True
-            left += 1
-        return False
-
-    def marker_fragment(left, right):
-        while left < right:
-            for value in ("BEGIN", "END"):
-                if (word(left, value) and (left == 0 or not text[left - 1].isascii()
-                                            or not text[left - 1].isalnum())
-                        and (left + len(value) == right or not text[left + len(value)].isascii()
-                             or not text[left + len(value)].isalnum())):
-                    return True
-            left += 1
-        return False
-
-    def private_key_fragment(left, right):
-        while left < right:
-            if word(left, "PRIVATE") or word(left, "KEY"):
-                return True
-            left += 1
-        return False
-
-    def non_ascii_alphanumeric(left, right):
-        return any(not text[index].isascii() and text[index].isalnum() for index in range(left, right))
-
-    # Either fence establishes a deliberate candidate boundary; do not repair
-    # or depend on BEGIN/END spelling inside that boundary.
-    left, right = start, end
-    while left < right and text[left] in " \t\r":
-        left += 1
-    while right > left and text[right - 1] in " \t\r":
-        right -= 1
-    fence_start = left
-    while left < right and text[left] == "-":
-        left += 1
-    fence_end = right
-    while right > left and text[right - 1] == "-":
-        right -= 1
-    if left - fence_start >= 3 or fence_end - right >= 3:
-        return (not non_ascii_alphanumeric(left, right)
-                and (private_then_key(left, right) or (marker_fragment(left, right) and private_key_fragment(left, right))))
+        return (index + len(value) <= end and all(text[index + offset] in (char, char.lower())
+                                                   for offset, char in enumerate(value)))
 
     # Bare candidates consume only horizontal indentation before exact BEGIN/END
     # and a closed label sequence. This leaves ordinary imperative prose outside
@@ -396,6 +349,122 @@ def _armor_suspicious(text, start, end):
         elif not (char.isspace() or char in "-_/"):
             return False
     return "".join(compact) in _PRIVATE_KEY_COMPACTS
+
+
+def _armor_matches(text, add):
+    """Scan a bounded span once for exact armor and malformed fenced candidates.
+
+    The candidate DFA never builds a normalized copy: it advances ASCII BEGIN,
+    END, PRIVATE and KEY states directly, allowing only delimiter separators
+    between letters. Exact delimiters remain the sole accepted grammar.
+    """
+    active = None
+    exact_delimiters = pair_count = partial_count = 0
+    fence_seen = False
+    line_start = 0
+    line_leading_hyphens = 0
+    line_prefix = True
+    line_marker_fragment = line_private = line_key = line_unicode = False
+    begin_index = end_index = private_index = key_index = 0
+    private_ready = marker_pending = False
+
+    def advance(index, value, char):
+        if char in " \t\r\n-_\/":
+            return index
+        if char == value[index] or char == value[index].lower():
+            return index + 1
+        return 1 if char == value[0] or char == value[0].lower() else 0
+
+    def finish_line(line_end):
+        nonlocal active, exact_delimiters, partial_count, fence_seen
+        nonlocal line_leading_hyphens, line_marker_fragment, line_private, line_key, line_unicode
+        nonlocal marker_pending
+        trimmed_start, trimmed_end = line_start, line_end
+        while trimmed_start < trimmed_end and text[trimmed_start] in " \t\r":
+            trimmed_start += 1
+        while trimmed_end > trimmed_start and text[trimmed_end - 1] in " \t\r":
+            trimmed_end -= 1
+        trailing = trimmed_end
+        while trailing > trimmed_start and text[trailing - 1] == "-":
+            trailing -= 1
+        line_fence = line_leading_hyphens >= 3 or trimmed_end - trailing >= 3
+        if line_fence:
+            fence_seen = True
+            if (line_private or line_key) and line_end - line_start > MAX_ARMOR_LINE_CHARS:
+                _fail("invalid-private-key")
+        if not line_unicode and line_marker_fragment:
+            partial_count += 1
+        if active is not None and line_end - active[1] > MAX_PRIVATE_KEY_CHARS:
+            _fail("secret-limit")
+        delimiter = _ARMOR_DELIMITER.fullmatch(text, trimmed_start, trimmed_end)
+        if delimiter is not None and delimiter.group(2) in _PRIVATE_KEY_LABELS:
+            exact_delimiters += 1
+            action, label = delimiter.groups()
+            if action == "BEGIN":
+                if active is not None:
+                    _fail("invalid-private-key")
+                active = (label, line_start)
+            else:
+                if active is None or active[0] != label:
+                    _fail("invalid-private-key")
+                add(active[1], line_end, "private-key", 0, MAX_PRIVATE_KEY_CHARS)
+                active = None
+        elif not line_fence and _bare_armor_suspicious(text, line_start, line_end):
+            _fail("invalid-private-key")
+        if line_unicode:
+            marker_pending = False
+
+    for position, char in enumerate(text):
+        if char == "\n":
+            finish_line(position)
+            line_start = position + 1
+            line_leading_hyphens = 0
+            line_prefix = True
+            line_marker_fragment = line_private = line_key = line_unicode = False
+            continue
+        if line_prefix:
+            if char in " \t\r":
+                pass
+            elif char == "-":
+                line_leading_hyphens += 1
+            else:
+                line_prefix = False
+        if not char.isascii() and char.isalnum():
+            line_unicode = True
+            begin_index = end_index = private_index = key_index = 0
+            private_ready = marker_pending = False
+            continue
+        begin_index = advance(begin_index, "BEGIN", char)
+        end_index = advance(end_index, "END", char)
+        private_index = advance(private_index, "PRIVATE", char)
+        key_index = advance(key_index, "KEY", char)
+        if begin_index == 5 or end_index == 3:
+            marker_pending = True
+            begin_index = end_index = 0
+        if private_index == 7:
+            line_private = True
+            private_ready = True
+            if marker_pending:
+                line_marker_fragment = True
+                marker_pending = False
+            private_index = 0
+        if key_index == 3:
+            line_key = True
+            if private_ready:
+                pair_count += 1
+                private_ready = False
+            if marker_pending:
+                line_marker_fragment = True
+                marker_pending = False
+            key_index = 0
+    finish_line(len(text))
+    if active is not None:
+        _fail("invalid-private-key")
+    # A boundary fence makes an ASCII PRIVATE ... KEY run a candidate even when
+    # marker spelling or line breaks are malformed. Exact delimiter lines are
+    # the only candidate events that may be consumed.
+    if fence_seen and (pair_count != exact_delimiters or partial_count != exact_delimiters):
+        _fail("invalid-private-key")
 
 
 class Redactor:
@@ -432,40 +501,7 @@ class Redactor:
                 return
             matches.append((start, end, kind, priority))
 
-        # Single linear line walk. Only complete, allowlisted delimiter lines
-        # are accepted; any private-key-looking malformed armor fails closed.
-        # No nested blocks, cross-label endings or regex search over key bodies.
-        position = 0
-        active = None
-        while position < len(text):
-            end = text.find("\n", position)
-            end = len(text) if end < 0 else end
-            if active is not None and end - active[1] > MAX_PRIVATE_KEY_CHARS:
-                _fail("secret-limit")
-            if _armor_suspicious(text, position, end):
-                if end - position > MAX_ARMOR_LINE_CHARS:
-                    _fail("invalid-private-key")
-                delimiter_start, delimiter_end = position, end
-                while delimiter_start < delimiter_end and text[delimiter_start] in " \t\r":
-                    delimiter_start += 1
-                while delimiter_end > delimiter_start and text[delimiter_end - 1] in " \t\r":
-                    delimiter_end -= 1
-                delimiter = _ARMOR_DELIMITER.fullmatch(text, delimiter_start, delimiter_end)
-                if delimiter is None or delimiter.group(2) not in _PRIVATE_KEY_LABELS:
-                    _fail("invalid-private-key")
-                action, label = delimiter.groups()
-                if action == "BEGIN":
-                    if active is not None:
-                        _fail("invalid-private-key")
-                    active = (label, position)
-                else:
-                    if active is None or active[0] != label:
-                        _fail("invalid-private-key")
-                    add(active[1], end, "private-key", 0, MAX_PRIVATE_KEY_CHARS)
-                    active = None
-            position = end + 1
-        if active is not None:
-            _fail("invalid-private-key")
+        _armor_matches(text, add)
         for pattern, kind, priority in ((_COOKIE, "cookie", 1), (_ASSIGN, "credential", 2), (_BEARER, "credential", 2)):
             for match in pattern.finditer(text):
                 start = match.end()
@@ -573,6 +609,10 @@ class Redactor:
                     event = _record(event, SourceSpan)
                     new_binding = _record(event.binding, SpanBinding)
                     if new_binding.context_id != self._context.context_id:
+                        _fail("invalid-context")
+                    if (new_binding.actor_resolution == "verified-owner"
+                            and (new_binding.actor_kind != "user"
+                                 or new_binding.actor_id != self._context.owner_id)):
                         _fail("invalid-context")
                     spans += 1
                     if spans > MAX_SPANS:
