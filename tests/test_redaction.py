@@ -245,13 +245,14 @@ class RedactionTest(unittest.TestCase):
             "We recommend --- private-key rotation --- before production rollout.",
             "Narrative --- PRIVATE_KEY operations --- are tracked.",
             "The literal --- private key phrase is ordinary prose.",
-            "prefix-----BEGIN PRIVATE KEY-----",
         )
         for text in prose:
             with self.subTest(text=text):
                 self.assertEqual(self.run_text(text, one_byte=True)[0].text, text)
         allowed = self.context(allowlist=prose[:3] + ("PRIVATEKEY",))
         self.assertEqual(self.run_text(prose[0], context=allowed)[0].text, prose[0])
+        self.reject(lambda: self.run_text("prefix-----BEGIN PRIVATE KEY-----", one_byte=True),
+                    "invalid-private-key")
         self.reject(lambda: self.run_text("-----BEGIN PRIVATEKEY-----\nsynthetic-secret\n-----END PRIVATEKEY-----",
                                           context=allowed, one_byte=True), "invalid-private-key")
 
@@ -264,8 +265,8 @@ class RedactionTest(unittest.TestCase):
             self.reject(lambda: self.run_text("----" + marker + " PRIVATEKEY----", one_byte=True), "invalid-private-key")
         for text in ("begin privatekey rotation safely", "BEGIN PRIVATE--KEY rotation safely"):
             self.assertEqual(self.run_text(text, one_byte=True)[0].text, text)
-        prose = "-----BEGIN PRIVATEKEY----- narrative suffix"
-        self.assertEqual(self.run_text(prose, one_byte=True)[0].text, prose)
+        self.reject(lambda: self.run_text("-----BEGIN PRIVATEKEY----- narrative suffix", one_byte=True),
+                    "invalid-private-key")
 
     def test_armor_shaped_private_key_lines_fail_closed_without_rejecting_bare_prose(self):
         payload = "synthetic-private-reviewer-payload"
@@ -276,8 +277,8 @@ class RedactionTest(unittest.TestCase):
                                                           one_byte=True), "invalid-private-key")
                 for diagnostic in (str(error), repr(error), repr(error.args), repr(vars(error))):
                     self.assertNotIn(payload, diagnostic)
-        prose = "-----BEGIN PRIVATE KEY----- narrative"
-        self.assertEqual(self.run_text(prose, one_byte=True)[0].text, prose)
+        self.reject(lambda: self.run_text("-----BEGIN PRIVATE KEY----- narrative", one_byte=True),
+                    "invalid-private-key")
         for text in ("BEGIN rotating the private key", "BEGINNING PRIVATEKEY",
                      "-----BEGIN KEY PRIVATE-----", "-----BEGIN PRİVATE KEY-----", "-----BEGIN PRIVATE KEY-----"):
             with self.subTest(text=text):
@@ -290,7 +291,9 @@ class RedactionTest(unittest.TestCase):
         for begin, end in (("--- PRIVATE KEY ---", "--- PRIVATE KEY ---"),
                            ("-----BEGI PRIVATE KEY-----", "-----EN PRIVATE KEY-----"),
                            ("-----FINISH PRIVATEX KEY-----", "-----STOP PRIVATEX KEY-----"),
-                           ("--- pRiVaTeKeY ---", "--- pRiVaTeKeY ---")):
+                           ("--- pRiVaTeKeY ---", "--- pRiVaTeKeY ---"),
+                           ("-----BEGIN PRIVATE KEY", "-----END PRIVATE KEY"),
+                           ("-----BEGI PRIVATE KEY", "EN PRIVATE KEY-----")):
             with self.subTest(begin=begin):
                 error = self.reject(lambda: self.run_text(begin + "\n" + payload + "\n" + end,
                                                           one_byte=True), "invalid-private-key")
@@ -299,11 +302,22 @@ class RedactionTest(unittest.TestCase):
                       "OPENSSH PRIVATE KEY", "ENCRYPTED PRIVATE KEY", "PGP PRIVATE KEY BLOCK", "PRIVATEKEY"):
             with self.subTest(label=label):
                 self.reject(lambda: self.run_text("BEGIN " + label, one_byte=True), "invalid-private-key")
+                self.reject(lambda: self.run_text("\tBEGIN " + label, one_byte=True), "invalid-private-key")
+        for orphan in ("-----BEGIN PRIVATE KEY", "END PRIVATE KEY-----"):
+            with self.subTest(orphan=orphan):
+                self.reject(lambda: self.run_text(orphan, one_byte=True), "invalid-private-key")
         for prose in ("BEGIN rotating PRIVATE KEY", "BEGIN rotating the private key",
                       "BEGIN PGP PRIVATE KEY", "We recommend --- PRIVATE KEY --- before rollout.",
                       "--- PRIVATE KEY ---", "--- KEY PRIVATE ---"):
             with self.subTest(prose=prose):
                 self.assertEqual(self.run_text(prose, one_byte=True)[0].text, prose)
+        # A fence on either side creates a deliberate security candidate boundary.
+        for candidate in ("--- PRIVATE KEY discussion", "PRIVATE KEY discussion ---", "--- PRIVATE KEY discussion ---"):
+            with self.subTest(candidate=candidate):
+                self.reject(lambda: self.run_text(candidate, one_byte=True), "invalid-private-key")
+        allowed = self.context(allowlist=("--- PRIVATE KEY ---",))
+        self.reject(lambda: self.run_text("--- PRIVATE KEY ---", context=allowed, one_byte=True),
+                    "invalid-private-key")
         self.reject(lambda: self.run_text("--- PRIVATE KEY" + "-" * r.MAX_ARMOR_LINE_CHARS + "---"),
                     "invalid-private-key")
 

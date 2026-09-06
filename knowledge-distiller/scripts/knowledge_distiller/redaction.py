@@ -314,8 +314,8 @@ def _armor_suspicious(text, start, end):
             left += 1
         return False
 
-    # A whole-line fence alone establishes the candidate boundary; deliberately
-    # do not repair or depend on BEGIN/END spelling inside that boundary.
+    # Either fence establishes a deliberate candidate boundary; do not repair
+    # or depend on BEGIN/END spelling inside that boundary.
     left, right = start, end
     while left < right and text[left] in " \t\r":
         left += 1
@@ -327,15 +327,19 @@ def _armor_suspicious(text, start, end):
     fence_end = right
     while right > left and text[right - 1] == "-":
         right -= 1
-    if left - fence_start >= 3 and fence_end - right >= 3:
+    if left - fence_start >= 3 or fence_end - right >= 3:
         return private_then_key(left, right)
 
-    # Bare candidates must begin exactly with BEGIN/END and use a closed label
-    # sequence. This leaves ordinary imperative prose outside the grammar.
-    if word(start, "BEGIN"):
-        marker_end = start + 5
-    elif word(start, "END"):
-        marker_end = start + 3
+    # Bare candidates consume only horizontal indentation before exact BEGIN/END
+    # and a closed label sequence. This leaves ordinary imperative prose outside
+    # the grammar while preserving indented private-key candidates.
+    bare_start = start
+    while bare_start < end and text[bare_start] in " \t":
+        bare_start += 1
+    if word(bare_start, "BEGIN"):
+        marker_end = bare_start + 5
+    elif word(bare_start, "END"):
+        marker_end = bare_start + 3
     else:
         return False
     if marker_end == end or text[marker_end].isascii() and text[marker_end].isalnum():
