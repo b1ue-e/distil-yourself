@@ -25,7 +25,7 @@ exact ContentGrant + AuthorityAttestation
   -> one non-executable draft skill
 ```
 
-The implementation must not search Lark, enumerate local session directories, follow document links/embeds/attachments, read sibling sessions, use an implicit principal, or fall back to a best-effort schema. Before Tasks 4 and 5 can turn either native adapter from `blocked` to `supported`, the user must provide an exact selector and approve a content read for a redacted compatibility fixture. A generic request to support a source type is not itself an executable ContentGrant for an unspecified resource.
+The implementation must not search Lark, enumerate local session directories, follow document links/embeds/attachments, read sibling sessions, use an implicit principal, or fall back to a best-effort schema. Before Tasks 5 and 6 can turn either native adapter from `blocked` to `supported`, the user must provide an exact selector and approve a content read for a redacted compatibility fixture. A generic request to support a source type is not itself an executable ContentGrant for an unspecified resource. The deterministic redaction boundary in Task 4 must be implemented and reviewed before either real fixture is captured.
 
 The first native session target is Codex because it exercises the local CLI-session path with the currently available executable. Claude Code and Trae remain required by the v1 design, but follow this milestone so their adapters can reuse the authorization, broker, redaction, provenance, and conformance code established here.
 
@@ -130,7 +130,34 @@ The first native session target is Codex because it exercises the local CLI-sess
 
   Expected: PASS without network access or real source reads.
 
-### Task 4: Unblock and implement the version-pinned Lark document adapter
+### Task 4: Build the deterministic pre-ingestion redaction boundary
+
+**Files:**
+
+- Create: `knowledge-distiller/scripts/knowledge_distiller/redaction.py`
+- Create: `tests/test_redaction.py`
+
+- [ ] **Step 1: Write failing deterministic-redaction tests**
+
+  Cover private keys, bearer/session tokens, cookies, credential-shaped assignments, emails, phone numbers, participant names/IDs, overlapping detections, arbitrary chunk boundaries, Unicode, false-positive allowlisting, stable placeholder IDs, and a guarantee that removed values never appear in outputs, errors, logs, manifests, or provenance metadata. Require exact byte/item/depth ceilings before retaining output.
+
+- [ ] **Step 2: Run redaction tests red**
+
+  Run: `python3 -m unittest tests.test_redaction -v`
+
+  Expected: FAIL because the redaction module does not exist.
+
+- [ ] **Step 3: Implement streaming redaction and provenance spans**
+
+  Emit minimally sufficient redacted spans with immutable IDs and typed derivation edges: redacted span -> native locator digest -> source snapshot -> ingestion run -> active grant/attestation digests. Preserve owner statements separately from non-owner context and mark non-owner content claim-ineligible by default. Never retain removed values in detector state after finalization, diagnostics, or provenance.
+
+- [ ] **Step 4: Run redaction and boundary tests green**
+
+  Run: `python3 -m unittest tests.test_redaction tests.test_source_io tests.test_sources -v`
+
+  Expected: PASS without source or network access.
+
+### Task 5: Unblock and implement the version-pinned Lark document adapter
 
 **Files:**
 
@@ -140,13 +167,13 @@ The first native session target is Codex because it exercises the local CLI-sess
 - Create: `tests/fixtures/adapters/lark/<product-version>/<schema-version>/expected-*.json`
 - Modify: `knowledge-distiller/references/adapter-compatibility.md`
 
-- [ ] **Step 1: Stop at the real-content approval gate**
+- [ ] **Step 1: Resolve the exact-current approval gate**
 
-  Ask for one exact Lark document URL/token, the intended revision, confirmation that the active user is the correct principal, and the required `ContentGrant`/`AuthorityAttestation`. Do not accept `latest` for the stored fixture. Do not inspect links, embeds, attachments, child documents, comments, or revision history unless separately selected.
+  Resolve only the user-provided exact Lark URL/token to its current immutable revision, verify the active user principal and content owner/authority, and bind the resulting `ContentGrant`/`AuthorityAttestation`. The current-resolution read is allowed only for that exact resource; the stored fixture must bind the returned numeric revision rather than `latest`. Do not inspect links, embeds, attachments, child documents, comments, or revision history unless separately selected.
 
 - [ ] **Step 2: Capture one minimized redacted compatibility fixture**
 
-  Invoke only the approved `lark-cli docs +fetch` read through the broker. Store no raw source in the repository. Produce a structurally complete fixture with content, personal identifiers, secrets, and tenant-specific locators replaced deterministically while preserving types, IDs/relations, optional-field presence, and schema shape. Record the observed CLI version, response-schema fingerprint, fixture digest, redaction transform version, and loss inventory.
+  Invoke only the approved `lark-cli docs +fetch` read through the broker and Task 4 redaction boundary. Store no raw source in the repository. Produce a structurally complete fixture with content, personal identifiers, secrets, and tenant-specific locators replaced deterministically while preserving types, IDs/relations, optional-field presence, and schema shape. Record the observed CLI version, response-schema fingerprint, pinned revision, fixture digest, redaction transform version, and loss inventory.
 
 - [ ] **Step 3: Write the parser tests before implementation**
 
@@ -162,7 +189,7 @@ The first native session target is Codex because it exercises the local CLI-sess
 
   Expected: 100% PASS. Change only the exact tested Lark tuple from `blocked` to `supported`; list all remaining unsupported cases.
 
-### Task 5: Unblock and implement the version-pinned Codex local-session adapter
+### Task 6: Unblock and implement the version-pinned Codex local-session adapter
 
 **Files:**
 
@@ -178,7 +205,7 @@ The first native session target is Codex because it exercises the local CLI-sess
 
 - [ ] **Step 2: Capture one minimized redacted native fixture**
 
-  Read only the exact granted descriptor through the local broker. Pin product and native-schema fingerprints, byte prefix length, prefix digest, owner/principal binding evidence, and redaction transform. Exclude later appends from the snapshot; reject a changing or truncated prefix.
+  Read only the exact granted descriptor through the local broker and Task 4 redaction boundary. Pin product and native-schema fingerprints, byte prefix length, prefix digest, owner/principal binding evidence, and redaction transform. Exclude later appends from the snapshot; reject a changing or truncated prefix.
 
 - [ ] **Step 3: Write complete causality conformance tests**
 
@@ -194,36 +221,26 @@ The first native session target is Codex because it exercises the local CLI-sess
 
   Expected: 100% PASS. Change only the exact tested Codex tuple from `blocked` to `supported`.
 
-### Task 6: Redact and ingest both source kinds with end-to-end provenance
+### Task 7: Ingest both source kinds with end-to-end provenance
 
 **Files:**
 
 - Create: `knowledge-distiller/scripts/knowledge_distiller/ingestion.py`
-- Create: `knowledge-distiller/scripts/knowledge_distiller/redaction.py`
 - Create: `tests/test_ingestion.py`
-- Create: `tests/test_redaction.py`
 - Modify: `knowledge-distiller/scripts/kd.py`
 - Modify: `tests/test_cli.py`
 
-- [ ] **Step 1: Write failing deterministic-redaction tests**
-
-  Cover private keys, bearer/session tokens, cookies, credential-shaped assignments, emails, phone numbers, participant names/IDs, overlapping detections, chunk boundaries, Unicode, false-positive allowlisting, stable placeholder IDs, and a guarantee that removed values never appear in outputs, errors, logs, manifests, or provenance metadata.
-
-- [ ] **Step 2: Implement streaming redaction and provenance spans**
-
-  Emit minimally sufficient redacted spans with immutable IDs and typed derivation edges: redacted span -> native locator -> source snapshot -> ingestion run -> active grant/attestation digests. Preserve owner statements separately from non-owner context and mark non-owner content claim-ineligible by default.
-
-- [ ] **Step 3: Write failing `ingest-source` CLI tests**
+- [ ] **Step 1: Write failing `ingest-source` CLI tests**
 
   Add an explicit command that consumes a private source request file, validates authorization, invokes exactly one adapter, persists the normalized/redacted snapshot atomically, and emits only source type, counts, digests, status, and bounded error codes. Cover Lark and Codex success using injected fixtures, plus revoked/expired grants, principal mismatch, schema drift, source change, partial ingestion, and crash recovery.
 
-- [ ] **Step 4: Implement the orchestration and run tests green**
+- [ ] **Step 2: Implement the orchestration and run tests green**
 
   Run: `python3 -m unittest tests.test_redaction tests.test_ingestion tests.test_cli -v`
 
   Expected: PASS; no raw source appears in the task journal or CLI output.
 
-### Task 7: Build the core evidence-to-skill loop
+### Task 8: Build the core evidence-to-skill loop
 
 **Files:**
 
@@ -260,7 +277,7 @@ The first native session target is Codex because it exercises the local CLI-sess
 
   Expected: PASS.
 
-### Task 8: Integrate the real core path into the skill guidance
+### Task 9: Integrate the real core path into the skill guidance
 
 **Files:**
 
@@ -284,7 +301,7 @@ The first native session target is Codex because it exercises the local CLI-sess
 
   Expected: PASS.
 
-### Task 9: Verify, simplify, independently review, and record completion
+### Task 10: Verify, simplify, independently review, and record completion
 
 **Files:**
 

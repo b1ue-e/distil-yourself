@@ -151,7 +151,7 @@ Task 3 已完成：将 `kd.py` 的显式路径、逐级 `O_NOFOLLOW`、regular/h
 
 Task 3 的 broker snapshot 区分 active reader 与独立 attested `content_owner`，不会把技术读取者误标为内容所有者；broker 不调用 document/event adapter parser，也未添加任何 production runner 或 native support tuple。主进程最新定向测试为 115/115，完整回归为 256/256，`compileall` 与 `git diff --check` 通过。独立规格复审为 `SPEC PASS`，质量复审为 `READY`，Critical、Important、Minor 均无遗留；安全文件读取重复代码已移除，broker 的授权、credential、receipt 与 source trust layers 被确认是必要的独立边界。实现与修复提交为 `722b8b4`、`7286cd6`、`54ef068`。
 
-尚未读取真实来源，也尚未把任何 native adapter 从 `blocked` 改为 `supported`。Lark 与 Codex 的真实 fixture 捕获分别设有精确 selector、revision/range、ContentGrant 与 AuthorityAttestation 审批门。下一个实现项为 Task 4：在用户给出精确 Lark selector 与内容授权后，捕获最小化脱敏 fixture 并实现版本固定的 Lark document adapter。
+尚未读取真实来源，也尚未把任何 native adapter 从 `blocked` 改为 `supported`。用户已提供精确 Wiki selector，并将授权范围限制为该页面的当前版本；真实读取仍需先完成 content-owner/authority 绑定。根据 2026-09-06 的安全顺序调整，先执行 Task 4 的确定性 pre-ingestion redaction boundary，完成并评审后才解析 Wiki 当前 revision、捕获最小化脱敏 fixture 和实现版本固定的 Lark document adapter。
 
 ### 产品里程碑
 
