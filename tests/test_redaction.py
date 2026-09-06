@@ -295,6 +295,9 @@ class RedactionTest(unittest.TestCase):
         for delimiter in ("-----BEGIN PRI.VATE KE.Y-----",
                           "-----BEG🙂IN PRI🙂VATE K🙂EY-----",
                           "-----BEGéIN PRIéVATE KE中Y-----",
+                          "-----BEGIN P.RIVATE K.EY-----",
+                          "-----B.EGIN P.RIVATE K.EY-----",
+                          "-----BEGIN P🙂RIVATE K🙂EY-----",
                           "-----BEGIN PRI.VATE KEY-----",
                           "-----BEGIN PRIVATE KE.Y-----"):
             with self.subTest(delimiter=delimiter):
@@ -303,6 +306,8 @@ class RedactionTest(unittest.TestCase):
                 self.assertNotIn(payload, repr(error))
         self.assertEqual(self.run_text("BEGIN PRI.VATE KE.Y", one_byte=True)[0].text,
                          "BEGIN PRI.VATE KE.Y")
+        self.assertEqual(self.run_text("--- P. review notes ---", one_byte=True)[0].text,
+                         "--- P. review notes ---")
 
     def test_split_private_key_delimiters_fail_closed(self):
         payload = "SYNTHETIC_PRIVATE_MATERIAL"
