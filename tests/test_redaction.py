@@ -266,9 +266,27 @@ class RedactionTest(unittest.TestCase):
             self.reject(lambda: self.run_text(text, one_byte=True), "invalid-private-key")
         for marker in ("BEGIN", "begin", "END", "eNd"):
             self.reject(lambda: self.run_text("----" + marker + " PRIVATEKEY----", one_byte=True), "invalid-private-key")
-        for text in ("begin privatekey rotation safely", "BEGIN PRIVATE--KEY rotation safely",
-                     "-----BEGIN PRIVATEKEY----- narrative suffix"):
+        for text in ("begin privatekey rotation safely", "BEGIN PRIVATE--KEY rotation safely"):
             self.assertEqual(self.run_text(text, one_byte=True)[0].text, text)
+        self.reject(lambda: self.run_text("-----BEGIN PRIVATEKEY----- narrative suffix", one_byte=True),
+                    "invalid-private-key")
+
+    def test_armor_shaped_private_key_lines_fail_closed_without_rejecting_bare_prose(self):
+        payload = "synthetic-private-reviewer-payload"
+        for begin, end in (("-----BEGINPRIVATE KEY-----", "-----ENDPRIVATE KEY-----"),
+                           ("-----BEGIN PRIVATE/KEY-----", "-----END PRIVATE/KEY-----"),
+                           ("-----BEGIN PRIVATE KEY----- narrative", "-----END PRIVATE KEY----- narrative")):
+            with self.subTest(begin=begin):
+                error = self.reject(lambda: self.run_text(begin + "\n" + payload + "\n" + end,
+                                                          one_byte=True), "invalid-private-key")
+                for diagnostic in (str(error), repr(error), repr(error.args), repr(vars(error))):
+                    self.assertNotIn(payload, diagnostic)
+        for text in ("BEGIN rotating the private key", "BEGINNING PRIVATEKEY", "-----BEGINNING PRIVATEKEY-----",
+                     "-----BEGIN KEY PRIVATE-----", "-----BEGIN PRİVATE KEY-----", "-----BEGIN PRIVATE KEY-----"):
+            with self.subTest(text=text):
+                self.assertEqual(self.run_text(text, one_byte=True)[0].text, text)
+        self.reject(lambda: self.run_text("-----BEGIN PRIVATE" + "-" * r.MAX_ARMOR_LINE_CHARS + "KEY-----"),
+                    "invalid-private-key")
 
     def test_public_validator_rejects_mutated_results_and_subclasses(self):
         self.assertTrue(hasattr(r, "validate_redaction_result"), "defensive output validator is missing")

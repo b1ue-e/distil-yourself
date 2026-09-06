@@ -296,46 +296,94 @@ _EMAIL = re.compile(r"(?<![\w.+-])[\w.+-]{1,128}@[\w-]{1,128}(?:\.[\w-]{1,63}){1
 _PHONE = re.compile(r"(?<!\w)\+?[0-9][0-9 ()-]{5,30}[0-9](?!\w)")
 
 
-def _armor_suspicious(line):
-    """Recognize only whole BEGIN/END lines; never repair their envelope.
+def _armor_suspicious(text, start, end):
+    """Recognize malformed private-key armor without treating prose as armor.
 
-    Scan in linear time with constant state. Only fixed words (at most seven
-    ASCII characters) are case-normalized, never an unbounded label/line.
-    PRIVATEKEY and separated variants are suspicious; narrative suffixes and
-    text without a line-start BEGIN/END token are not. Exact parsing below still
-    requires the supported spelling, delimiters and matching END label.
+    Armor-shaped lines start with at least three hyphens and fail closed when a
+    BEGIN/END token has a PRIVATE...KEY label. Bare lines have a stricter compact
+    label grammar, so narrative such as ``BEGIN rotating the private key`` stays
+    ordinary prose. Both walks use indexes and fixed ASCII word comparisons: no
+    regex search, normalization or unbounded line copy is needed.
     """
-    def separator(char):
-        return char.isspace() or char in "-_"
-
-    def word(start, value):
-        fragment = line[start:start + len(value)]
-        return fragment.isascii() and fragment.upper() == value
-
-    start = 0
-    while start < len(line) and (line[start].isspace() or line[start] == "-"):
-        start += 1
-    if word(start, "BEGIN"):
-        start += 5
-    elif word(start, "END"):
-        start += 3
-    else:
-        return False
-    if start == len(line) or not separator(line[start]):
-        return False
-    end = len(line)
-    while end > start and separator(line[end - 1]):
-        end -= 1
-    if end - start >= 5 and word(end - 5, "BLOCK"):
-        end -= 5
-    for token in ("KEY", "PRIVATE"):
-        while end > start and separator(line[end - 1]):
-            end -= 1
-        if end - start < len(token) or not word(end - len(token), token):
+    def word(index, value):
+        if index + len(value) > end:
             return False
-        end -= len(token)
-    return all(separator(line[index]) or (line[index].isascii() and line[index].isalnum())
-               for index in range(start, end))
+        return all(text[index + offset] in (char, char.lower())
+                   for offset, char in enumerate(value))
+
+    def marker(index):
+        if word(index, "BEGIN"):
+            return index + 5
+        if word(index, "END"):
+            return index + 3
+        return None
+
+    def private_key(index):
+        # The line ceiling also bounds the separator walk. Unicode letters are
+        # alphanumeric here, so confusables cannot become an ASCII KEY token.
+        while index < end:
+            if word(index, "PRIVATE"):
+                key = index + 7
+                separators = 0
+                while key < end and not text[key].isalnum():
+                    key += 1
+                    separators += 1
+                    if separators > MAX_ARMOR_LINE_CHARS:
+                        break
+                if separators <= MAX_ARMOR_LINE_CHARS and word(key, "KEY"):
+                    return True
+            index += 1
+        return False
+
+    index = start
+    while index < end and text[index].isspace():
+        index += 1
+    hyphens = index
+    while index < end and text[index] == "-":
+        index += 1
+    if index - hyphens >= 3:
+        marker_end = marker(index)
+        if marker_end is None:
+            return False
+        # BEGINNING is prose, but BEGINPRIVATE is malformed armor.
+        if marker_end < end and text[marker_end].isalnum() and not word(marker_end, "PRIVATE"):
+            return False
+        return private_key(marker_end)
+
+    # One or two malformed leading hyphens retain the previous fail-closed bare
+    # behavior. Three or more are handled by the armor-shaped branch above.
+    marker_end = marker(index)
+    if marker_end is None or marker_end == end or text[marker_end].isalnum():
+        return False
+    tokens = []
+    index = marker_end
+    while index < end:
+        while index < end and not (text[index].isascii() and text[index].isalnum()):
+            index += 1
+        token_start = index
+        while index < end and text[index].isascii() and text[index].isalnum():
+            index += 1
+        if token_start == index:
+            continue
+        if index - token_start > MAX_ARMOR_LINE_CHARS or len(tokens) == 4:
+            return False
+        tokens.append((token_start, index))
+
+    def token(index, value):
+        token_start, token_end = tokens[index]
+        return token_end - token_start == len(value) and word(token_start, value)
+
+    prefix = len(tokens) - 1
+    if prefix in (0, 1) and token(prefix, "PRIVATEKEY"):
+        return True
+    if prefix in (0, 1) and token(prefix, "PRIVATEKEYBLOCK"):
+        return True
+    prefix = len(tokens) - 2
+    if prefix in (0, 1) and token(prefix, "PRIVATE") and token(prefix + 1, "KEY"):
+        return True
+    prefix = len(tokens) - 3
+    return (prefix in (0, 1) and token(prefix, "PRIVATE") and token(prefix + 1, "KEY")
+            and token(prefix + 2, "BLOCK"))
 
 
 class Redactor:
@@ -382,11 +430,15 @@ class Redactor:
             end = len(text) if end < 0 else end
             if active is not None and end - active[1] > MAX_PRIVATE_KEY_CHARS:
                 _fail("secret-limit")
-            line = text[position:end]
-            if _armor_suspicious(line):
-                if len(line) > MAX_ARMOR_LINE_CHARS:
+            if _armor_suspicious(text, position, end):
+                if end - position > MAX_ARMOR_LINE_CHARS:
                     _fail("invalid-private-key")
-                delimiter = _ARMOR_DELIMITER.fullmatch(line.strip(" \t\r"))
+                delimiter_start, delimiter_end = position, end
+                while delimiter_start < delimiter_end and text[delimiter_start] in " \t\r":
+                    delimiter_start += 1
+                while delimiter_end > delimiter_start and text[delimiter_end - 1] in " \t\r":
+                    delimiter_end -= 1
+                delimiter = _ARMOR_DELIMITER.fullmatch(text, delimiter_start, delimiter_end)
                 if delimiter is None or delimiter.group(2) not in _PRIVATE_KEY_LABELS:
                     _fail("invalid-private-key")
                 action, label = delimiter.groups()
