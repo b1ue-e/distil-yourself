@@ -321,6 +321,41 @@ class RedactionTest(unittest.TestCase):
         self.reject(lambda: self.run_text("--- PRIVATE KEY" + "-" * r.MAX_ARMOR_LINE_CHARS + "---"),
                     "invalid-private-key")
 
+    def test_credential_horizontal_whitespace_and_escaped_quotes_fail_closed(self):
+        secrets = ("assignment-secret", "assigned-secret", "bearer-secret", "cookie-secret")
+        text = ("password" + " " * 33 + "=" + secrets[0] + "\n"
+                + "password=" + " " * 33 + secrets[1] + "\n"
+                + "Bearer" + " " * 33 + secrets[2] + "\n"
+                + " " * 33 + "Cookie:" + " " * 33 + secrets[3])
+        result = self.run_text(text, one_byte=True)[0].text
+        for secret in secrets:
+            self.assertNotIn(secret, result)
+        prose = "password" + " " * 33 + "rotation discussion"
+        self.assertEqual(self.run_text(prose, one_byte=True)[0].text, prose)
+        with mock.patch.object(r, "MAX_INPUT_BYTES", 512):
+            prefix, suffix = "password", "=bounded-secret"
+            result = self.run_text(prefix + " " * (r.MAX_INPUT_BYTES - len(prefix) - len(suffix)) + suffix)[0].text
+            self.assertNotIn("bounded-secret", result)
+        for quote, escaped in (("\"", "left\\\\\\\"right"), ("'", "left\\\\\\'right")):
+            secret = escaped + "-secret"
+            text = "password=" + quote + secret + quote
+            with self.subTest(quote=quote):
+                result = self.run_text(text, one_byte=True)[0].text
+                self.assertNotIn(secret, result)
+                self.assertEqual(result.count("[redacted:credential:"), 1)
+        for text in ("password=\"unterminated\\r\\nnext", "password='bad\\q'"):
+            with self.subTest(text=text):
+                self.reject(lambda: self.run_text(text, one_byte=True), "invalid-event")
+
+    def test_compact_bare_pgp_private_key_variants_fail_closed(self):
+        payload = "synthetic-private-pgp-payload"
+        for label in ("PGP PRIVATEKEY BLOCK", "PGP PRIVATE KEYBLOCK", "PGP PRIVATEKEYBLOCK"):
+            with self.subTest(label=label):
+                text = "BEGIN " + label + "\r\n" + payload + "\r\nEND " + label
+                error = self.reject(lambda: self.run_text(text, one_byte=True), "invalid-private-key")
+                self.assertNotIn(payload, repr(error))
+                self.reject(lambda: self.run_text("BEGIN " + label, one_byte=True), "invalid-private-key")
+
     def test_public_validator_rejects_mutated_results_and_subclasses(self):
         self.assertTrue(hasattr(r, "validate_redaction_result"), "defensive output validator is missing")
         def validate(result, **changes):

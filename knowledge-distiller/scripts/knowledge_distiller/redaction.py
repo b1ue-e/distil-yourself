@@ -289,9 +289,9 @@ def validate_redaction_result(result, *, context: TrustContext, key: bytes) -> T
 _PRIVATE_KEY_LABELS = frozenset(("PRIVATE KEY", "RSA PRIVATE KEY", "EC PRIVATE KEY", "DSA PRIVATE KEY",
                                "OPENSSH PRIVATE KEY", "ENCRYPTED PRIVATE KEY", "PGP PRIVATE KEY BLOCK"))
 _ARMOR_DELIMITER = re.compile(r"-----(BEGIN|END) ([A-Z0-9 ]{1,64})-----")
-_ASSIGN = re.compile(r"(?i)(?<![^\W_])(?:password|passwd|pwd|secret|secret[_-]access[_-]key|client_secret|token|api[_-]?key|api[_-]?token|session(?:[_-]?token|[_-]?id)?|access[_-]?token|refresh[_-]?token)[\"']?[ \t]{0,32}[:=][ \t]{0,32}")
-_BEARER = re.compile(r"(?i)(?<!\w)bearer[ \t]{1,32}")
-_COOKIE = re.compile(r"(?im)^[ \t]{0,32}(?:set-cookie|cookie)[ \t]{0,32}:[ \t]{0,32}")
+_ASSIGN = re.compile(r"(?i)(?<![^\W_])(?:password|passwd|pwd|secret|secret[_-]access[_-]key|client_secret|token|api[_-]?key|api[_-]?token|session(?:[_-]?token|[_-]?id)?|access[_-]?token|refresh[_-]?token)[\"']?[ \t]*[:=][ \t]*")
+_BEARER = re.compile(r"(?i)(?<!\w)bearer[ \t]+")
+_COOKIE = re.compile(r"(?im)^[ \t]*(?:set-cookie|cookie)[ \t]*:[ \t]*")
 _EMAIL = re.compile(r"(?<![\w.+-])[\w.+-]{1,128}@[\w-]{1,128}(?:\.[\w-]{1,63}){1,8}(?![\w.-])")
 _PHONE = re.compile(r"(?<!\w)\+?[0-9][0-9 ()-]{5,30}[0-9](?!\w)")
 
@@ -370,9 +370,11 @@ def _armor_suspicious(text, start, end):
                 or (token(0, "RSA") or token(0, "EC") or token(0, "DSA")
                     or token(0, "OPENSSH") or token(0, "ENCRYPTED")) and token(1, "PRIVATEKEY"))
     if len(tokens) == 3:
-        return ((token(0, "RSA") or token(0, "EC") or token(0, "DSA")
-                 or token(0, "OPENSSH") or token(0, "ENCRYPTED"))
-                and token(1, "PRIVATE") and token(2, "KEY"))
+        return (((token(0, "RSA") or token(0, "EC") or token(0, "DSA")
+                  or token(0, "OPENSSH") or token(0, "ENCRYPTED"))
+                 and token(1, "PRIVATE") and token(2, "KEY"))
+                or (token(0, "PGP") and ((token(1, "PRIVATEKEY") and token(2, "BLOCK"))
+                                           or (token(1, "PRIVATE") and token(2, "KEYBLOCK")))))
     return len(tokens) == 4 and token(0, "PGP") and token(1, "PRIVATE") and token(2, "KEY") and token(3, "BLOCK")
 
 
@@ -450,10 +452,25 @@ class Redactor:
                 end = start
                 quote = text[start:start + 1] if text[start:start + 1] in ("'", '"') else None
                 if quote and kind != "cookie":
-                    end = text.find(quote, start + 1, start + MAX_SECRET_CHARS + 3)
-                    if end < 0:
-                        _fail("secret-limit" if len(text) - start > MAX_SECRET_CHARS else "invalid-event")
-                    start += 1
+                    value_start = start + 1
+                    end = value_start
+                    while end < len(text):
+                        if end - value_start > MAX_SECRET_CHARS:
+                            _fail("secret-limit")
+                        if text[end] == quote:
+                            start = value_start
+                            break
+                        if text[end] in "\r\n":
+                            _fail("invalid-event")
+                        if text[end] == "\\":
+                            escaped = end + 1
+                            if escaped == len(text) or text[escaped] not in (quote, "\\"):
+                                _fail("invalid-event")
+                            end += 2
+                        else:
+                            end += 1
+                    else:
+                        _fail("secret-limit" if len(text) - value_start > MAX_SECRET_CHARS else "invalid-event")
                 else:
                     while end < len(text) and (text[end] not in "\r\n" if kind == "cookie" else not text[end].isspace() and text[end] not in ",;\"'}]"):
                         end += 1
