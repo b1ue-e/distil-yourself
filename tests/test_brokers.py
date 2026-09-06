@@ -73,9 +73,10 @@ class BrokerTest(unittest.TestCase):
         with mock.patch.dict(os.environ, {"AWS_SECRET_ACCESS_KEY": "AMBIENT", "HOME": "PRIVATE"}):
             result = self.fetch()
         args, kwargs = self.runner.call_args
-        self.assertEqual(args, (("lark-cli", "docs", "+fetch", "--doc", self.context.selector,
-                                 "--scope", "full", "--detail", "with-ids", "--format", "json",
-                                 "--as", "user", "--revision-id", "42"),))
+        self.assertEqual(args, ((
+            "lark-cli", "api", "GET",
+            "/open-apis/docx/v1/documents/DocABC123/raw_content",
+            "--as", "user"),))
         self.assertEqual(kwargs, {"env": {"LARK_TEST_USER_TOKEN": "SECRET-CREDENTIAL"},
                                   "shell": False, "timeout": 30, "max_bytes": brokers.MAX_GRAPH_BYTES,
                                   "allow_redirects": False, "allow_fallback_principal": False})
@@ -103,7 +104,9 @@ class BrokerTest(unittest.TestCase):
         self.runner.return_value = self.response
         self.fetch(request=brokers.LarkRequest("DocABC123", "42"), context=context,
                    records=self.records(context))
-        self.assertEqual(self.runner.call_args.args[0][4], "DocABC123")
+        self.assertEqual(
+            self.runner.call_args.args[0][3],
+            "/open-apis/docx/v1/documents/DocABC123/raw_content")
 
     def test_snapshot_owner_is_independently_attested_content_owner_for_both_sources(self):
         lark = self.fetch()

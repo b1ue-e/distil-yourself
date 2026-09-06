@@ -113,7 +113,7 @@ class SkillContractTest(unittest.TestCase):
             re.findall(r"(?mi)^supported native versions:\s*(.+)$", text),
             ["Lark / 1.0.0 / 1.0.86 / docx-v1-raw-content-v1 (normalizer only)."],
         )
-        self.assertIn("no observed content or", lower)
+        self.assertIn("no observed content or tenant locator", " ".join(lower.split()))
         self.assertNotRegex(lower, r"readiness[^\n]*\| `(?:ready|supported|experimental)`")
         for adapter in ("Lark", "Codex", "Claude Code", "Trae"):
             section = text.split(f"## {adapter}\n", 1)[1].split("\n## ", 1)[0]

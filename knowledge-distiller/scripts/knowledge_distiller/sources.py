@@ -10,7 +10,7 @@ Documents additionally allow at most 10,000 blocks, 250,000 traversed JSON items
 The preflight checks these ceilings before typed block normalization.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 import hashlib
 from itertools import chain
 import json
@@ -133,6 +133,65 @@ class SourceSnapshotManifest:
 
 def _reject(code: str) -> None:
     raise SourceValidationError(code)
+
+
+def _typed_record(value: Any, cls: type) -> Any:
+    if type(value) is not cls or set(vars(value)) != {
+            item.name for item in fields(cls)}:
+        _reject("invalid-type")
+    return value
+
+
+def _typed_data(value: Any, cls: type) -> dict:
+    value = _typed_record(value, cls)
+    return {field.name: getattr(value, field.name) for field in fields(cls)}
+
+
+def canonical_document_payload(value: CanonicalDocument) -> dict:
+    """Return the strict input-schema form of a typed canonical document.
+
+    ``canonical_digest`` is derived output and fidelity losses use ``item_id``
+    internally, so a generic dataclass conversion is not the wire schema.
+    Every nested record and tuple is checked before conversion.
+    """
+    document = _typed_record(value, CanonicalDocument)
+    identity = _typed_data(document.adapter, adapters.AdapterIdentity)
+    owner = _typed_data(document.owner, OwnerBinding)
+    if type(document.blocks) is not tuple or type(document.fidelity_losses) is not tuple:
+        _reject("invalid-type")
+    blocks = []
+    for item in document.blocks:
+        block = _typed_record(item, DocumentBlock)
+        if type(block.content_segments) is not tuple or type(block.artifact_locators) is not tuple:
+            _reject("invalid-type")
+        blocks.append({
+            "id": block.id, "native_block_id": block.native_block_id,
+            "parent_block_id": block.parent_block_id, "order": block.order,
+            "author": _typed_data(block.author, AuthorResolution),
+            "content_segments": [
+                _typed_data(segment, ContentSegment)
+                for segment in block.content_segments],
+            "artifact_locators": [
+                _typed_data(locator, ArtifactLocator)
+                for locator in block.artifact_locators],
+            "claim_eligible": block.claim_eligible,
+        })
+    losses = []
+    for item in document.fidelity_losses:
+        loss = _typed_record(item, FidelityLoss)
+        losses.append({
+            "code": loss.code, "block_id": loss.item_id,
+            "native_fact": loss.native_fact, "reason": loss.reason,
+        })
+    return {
+        "schema_version": document.schema_version,
+        "adapter": identity,
+        "source_snapshot_id": document.source_snapshot_id,
+        "owner": owner,
+        "native_document_id": document.native_document_id,
+        "revision": document.revision, "blocks": blocks,
+        "fidelity_losses": losses,
+    }
 
 
 def _identity(value: Any) -> adapters.AdapterIdentity:
@@ -325,8 +384,13 @@ def validate_source_snapshot(value: Any, *, payload: Any, raw_bytes: bytes,
             _reject("payload-kind-mismatch")
         if type(raw_bytes) is not bytes or len(raw_bytes) > adapters.MAX_GRAPH_BYTES:
             _reject("invalid-source-bytes")
-        validated = (_document(payload, context) if kind == "document" else
-                     adapters.validate_event_graph(payload, context=context))
+        typed_digest = None
+        normalized_payload = payload
+        if kind == "document" and type(payload) is CanonicalDocument:
+            typed_digest = payload.canonical_digest
+            normalized_payload = canonical_document_payload(payload)
+        validated = (_document(normalized_payload, context) if kind == "document" else
+                     adapters.validate_event_graph(normalized_payload, context=context))
         identity = _identity(manifest["adapter"])
         owner = _owner(manifest["owner"], context.expected_owner_id)
         snapshot = adapters._snapshot(manifest["source_snapshot_id"], "/")
@@ -339,11 +403,13 @@ def validate_source_snapshot(value: Any, *, payload: Any, raw_bytes: bytes,
         if (snapshot != raw_digest or snapshot != validated.source_snapshot_id or identity != validated.adapter
                 or manifest["raw_digest"] != raw_digest or byte_count != len(raw_bytes)
                 or item_count != expected_count or manifest["canonical_digest"] != validated.canonical_digest
-                or manifest["payload_reference"] != validated.canonical_digest):
+                or manifest["payload_reference"] != validated.canonical_digest
+                or (typed_digest is not None and typed_digest != validated.canonical_digest)):
             _reject("snapshot-binding-mismatch")
-        ids = {item["id"] for item in payload["blocks" if kind == "document" else "events"]}
+        ids = {item["id"] for item in normalized_payload[
+            "blocks" if kind == "document" else "events"]}
         losses = _losses(manifest["fidelity_losses"], ids, kind == "document")
-        if manifest["fidelity_losses"] != payload["fidelity_losses"]:
+        if manifest["fidelity_losses"] != normalized_payload["fidelity_losses"]:
             _reject("snapshot-binding-mismatch")
         return SourceSnapshotManifest(SNAPSHOT_SCHEMA, kind, snapshot, identity, owner, raw_digest,
                                       validated.canonical_digest, byte_count, item_count, losses,

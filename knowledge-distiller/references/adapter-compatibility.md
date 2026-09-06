@@ -11,10 +11,11 @@ All other native reads and parsers remain disabled until an exact version passes
 the required conformance fixtures.
 
 The Lark row includes one explicitly authorized current-document compatibility
-probe. Raw content flowed directly into the deterministic redactor; only bounded
-schema fields, counts, and digests were emitted, and no observed content or
-tenant locator was retained in repository fixtures. No session data or indexes
-were inspected.
+probe. CLI output flowed directly into a bounded in-memory probe; its closed
+transport envelope was decoded and only decoded content entered the deterministic
+redactor. Only bounded schema fields, counts, and digests were emitted, and no
+observed content or tenant locator was retained in repository fixtures. No
+session data or indexes were inspected.
 
 | Adapter | Readiness | Locally observed client | Product capability evidence | Stable parse-contract evidence |
 | --- | --- | --- | --- | --- |
@@ -53,9 +54,9 @@ provide a production credential runner, persist evidence, or enable ingestion.
   implicit traversal remain blocked and require separate fixtures/approval.
 - **Failure behavior:** fail closed on an absent binary, non-user or ambiguous
   identity, owner mismatch, revision change, unknown/missing/duplicate response
-  fields, malformed JSON, unvalidated redaction output, resource limits, or any
-  mutation path. Never retry under another principal, broaden the selector, or
-  echo content.
+  fields, malformed JSON, JSON-escape/redaction ordering violations, unvalidated
+  redaction output, resource limits, or any mutation path. Never retry under
+  another principal, broaden the selector, or echo content.
 
 ## Codex
 

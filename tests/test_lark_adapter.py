@@ -15,7 +15,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "tests" / "fixtures" / "adapters" / "lark" / "1.0.86" / "docx-v1-raw-content-v1"
 sys.path.insert(0, str(ROOT / "knowledge-distiller" / "scripts"))
-from knowledge_distiller import redaction
+from knowledge_distiller import redaction, sources
 
 
 def digest(value):
@@ -51,8 +51,9 @@ class LarkRawContentAdapterTest(unittest.TestCase):
     def normalize_raw(self, raw, **changes):
         snapshot = digest(raw)
         trust, binding = self.trust(snapshot)
+        content = native.decode_lark_raw_content(raw)
         result = redaction.Redactor(trust, self.key).redact(
-            (redaction.SourceSpan(binding), redaction.SourceChunk(raw)))
+            (redaction.SourceSpan(binding), redaction.SourceChunk(content)))
         fields = dict(
             expected_owner_id=self.owner, expected_source_snapshot_id=snapshot,
             expected_revision="3365", native_document_id=self.document,
@@ -98,6 +99,15 @@ class LarkRawContentAdapterTest(unittest.TestCase):
                          [("non-semantic-formatting", "formatting", "native-unavailable")])
         self.assertEqual(document, self.normalize("Rule: password=synthetic-secret contact alice@example.org"))
 
+    def test_json_escapes_are_decoded_before_redaction(self):
+        raw = (b'{"ok":true,"identity":"user","data":{"content":'
+               b'"alice\\u0040example.org password\\u003dsynthetic-secret"}}')
+        text = self.normalize_raw(raw).blocks[0].content_segments[0].text
+        self.assertIn("[redacted:email:hmac-sha256:", text)
+        self.assertIn("[redacted:credential:hmac-sha256:", text)
+        self.assertNotIn("alice@example.org", text)
+        self.assertNotIn("synthetic-secret", text)
+
     def test_observed_shape_fixture_is_fully_synthetic_and_pinned(self):
         raw = (FIXTURES / "redacted-current.json").read_bytes()
         document = self.normalize_raw(raw)
@@ -110,6 +120,12 @@ class LarkRawContentAdapterTest(unittest.TestCase):
         self.assertEqual(metadata["response_schema_digest"], digest(shape))
         self.assertEqual(metadata["observed_cli_version"], "1.0.86")
         self.assertEqual(metadata["observed_revision"], "3365")
+        self.assertEqual(metadata["response_schema_shape"], {
+            "ok": "literal:true", "identity": "literal:user",
+            "data": {"content": "string"},
+        })
+        self.assertEqual(metadata["response_schema_digest"],
+                         "sha256:9ea00db953bf91884d198de7a10282a0c519cefc0065b5f113bc8cce528d273f")
         self.assertFalse(metadata["comment_content_requested"])
         self.assertFalse(metadata["content_retained_from_observation"])
         self.assertNotIn("bytedance", raw.decode("utf-8").lower())
@@ -128,9 +144,7 @@ class LarkRawContentAdapterTest(unittest.TestCase):
         for raw in invalid:
             with self.subTest(raw=raw[:20]):
                 self.reject(lambda raw=raw: self.normalize_raw(raw))
-        with self.assertRaises(redaction.RedactionError) as caught:
-            self.normalize_raw(b'\xffsynthetic-secret')
-        self.assertEqual(caught.exception.code, "invalid-utf8")
+        self.reject(lambda: self.normalize_raw(b'\xffsynthetic-secret'), "invalid-utf8")
 
     def test_external_context_and_redaction_binding_are_mandatory(self):
         raw = b'{"ok":true,"identity":"user","data":{"content":"hello"}}'
@@ -141,6 +155,7 @@ class LarkRawContentAdapterTest(unittest.TestCase):
                 {"expected_source_snapshot_id": digest("other")},
                 {"expected_revision": "3366"},
                 {"native_document_id": ""},
+                {"native_document_id": digest("other-document")},
                 {"product_version": "1.0.87"}):
             with self.subTest(changes=context_changes):
                 self.reject(lambda context_changes=context_changes: self.normalize_raw(
@@ -160,7 +175,8 @@ class LarkRawContentAdapterTest(unittest.TestCase):
         snapshot = digest(raw)
         trust, binding = self.trust(snapshot)
         result = redaction.Redactor(trust, self.key).redact(
-            (redaction.SourceSpan(binding), redaction.SourceChunk(raw)))
+            (redaction.SourceSpan(binding),
+             redaction.SourceChunk(native.decode_lark_raw_content(raw))))
         object.__setattr__(result[0], "text", result[0].text.replace("hello", "synthetic-secret"))
         context = native.LarkNormalizationContext(
             self.owner, snapshot, "3365", self.document, "1.0.86")
@@ -171,12 +187,86 @@ class LarkRawContentAdapterTest(unittest.TestCase):
             raw, context=context, redaction_context=trust, redaction_key=self.key,
             expected_binding=binding))
 
+    def test_rejects_non_external_binding_and_multiple_spans(self):
+        raw = b'{"ok":true,"identity":"user","data":{"content":"hello"}}'
+        snapshot = digest(raw)
+        trust, binding = self.trust(snapshot)
+        context = native.LarkNormalizationContext(
+            self.owner, snapshot, "3365", self.document, "1.0.86")
+        for changes in (
+                {"actor_kind": "user", "actor_id": self.owner,
+                 "actor_resolution": "verified-owner"},
+                {"actor_kind": "assistant", "actor_id": digest("assistant"),
+                 "actor_resolution": "native"}):
+            candidate = dataclasses.replace(binding, **changes)
+            result = redaction.Redactor(trust, self.key).redact((
+                redaction.SourceSpan(candidate), redaction.SourceChunk(b"hello")))
+            self.reject(lambda result=result, candidate=candidate:
+                        native.normalize_lark_raw_content(
+                            result, context=context, redaction_context=trust,
+                            redaction_key=self.key, expected_binding=candidate),
+                        "invalid-context")
+        result = redaction.Redactor(trust, self.key).redact((
+            redaction.SourceSpan(binding), redaction.SourceChunk(b"one"),
+            redaction.SourceSpan(binding), redaction.SourceChunk(b"two")))
+        self.reject(lambda: native.normalize_lark_raw_content(
+            result, context=context, redaction_context=trust,
+            redaction_key=self.key, expected_binding=binding), "invalid-context")
+
     def test_empty_content_is_valid_and_resource_limits_fail_closed(self):
         self.assertEqual(self.normalize("").blocks[0].content_segments[0].text, "")
         with mock.patch.object(redaction, "MAX_INPUT_BYTES", 64):
-            with self.assertRaises(redaction.RedactionError) as caught:
-                self.normalize("x" * 100)
-            self.assertEqual(caught.exception.code, "input-limit")
+            self.reject(lambda: self.normalize("x" * 100), "input-limit")
+
+    def test_revision_bounds_and_context_constructor_are_code_only(self):
+        self.assertEqual(len("9" * 20), 20)
+        native.LarkNormalizationContext(
+            self.owner, digest("snapshot"), "9" * 20, self.document, "1.0.86")
+        self.assertTrue(native.lark_native_locator_digest(self.document, "9" * 20).startswith("sha256:"))
+        for action in (
+                lambda: native.LarkNormalizationContext(
+                    self.owner, digest("snapshot"), "9" * 21, self.document, "1.0.86"),
+                lambda: native.lark_native_locator_digest(self.document, "9" * 21),
+                lambda: native.LarkNormalizationContext(private_secret="synthetic-secret"),
+                lambda: native.LarkNormalizationContext(self.owner)):
+            self.reject(action)
+
+    def test_normalized_document_enters_snapshot_manifest_without_conversion(self):
+        raw = b'{"ok":true,"identity":"user","data":{"content":"safe text"}}'
+        document = self.normalize_raw(raw)
+        payload = sources.canonical_document_payload(document)
+        manifest = {
+            "schema_version": sources.SNAPSHOT_SCHEMA,
+            "source_kind": "document",
+            "source_snapshot_id": digest(raw),
+            "adapter": payload["adapter"],
+            "owner": payload["owner"],
+            "raw_digest": digest(raw),
+            "canonical_digest": document.canonical_digest,
+            "source_byte_count": len(raw),
+            "source_item_count": len(document.blocks),
+            "fidelity_losses": payload["fidelity_losses"],
+            "payload_kind": "canonical-document",
+            "payload_reference": document.canonical_digest,
+        }
+        record = sources.validate_source_snapshot(
+            manifest, payload=document, raw_bytes=raw,
+            context=sources.DocumentValidationContext(
+                self.owner, digest(raw), "3365", ()))
+        self.assertEqual(record.payload, document)
+        tampered = dataclasses.replace(document, canonical_digest=digest("other"))
+        with self.assertRaises(sources.SourceValidationError) as caught:
+            sources.validate_source_snapshot(
+                manifest, payload=tampered, raw_bytes=raw,
+                context=sources.DocumentValidationContext(
+                    self.owner, digest(raw), "3365", ()))
+        self.assertEqual(caught.exception.code, "snapshot-binding-mismatch")
+        mutated_block = dataclasses.replace(document.blocks[0])
+        object.__setattr__(mutated_block, "private_secret", "synthetic-secret")
+        mutated_document = dataclasses.replace(document, blocks=(mutated_block,))
+        with self.assertRaises(sources.SourceValidationError) as caught:
+            sources.canonical_document_payload(mutated_document)
+        self.assertEqual(caught.exception.code, "invalid-type")
 
     def test_normalizer_is_pure_and_does_not_discover_or_traverse(self):
         with mock.patch("builtins.open", side_effect=AssertionError("I/O")), \

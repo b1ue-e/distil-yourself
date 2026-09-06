@@ -118,7 +118,7 @@ The first native session target is Codex because it exercises the local CLI-sess
 
 - [x] **Step 3: Write failing broker-policy tests**
 
-  Lark tests must require exactly one normalized document URL/token, pinned revision, `--as user`, JSON response, an allowlisted `docs +fetch` argv, no shell, no redirects/fallback principal, a cleared credential-leaking environment, timeout, and byte ceiling. Local-session tests must require one exact granted file and byte/range bounds; they must prove no directory enumeration or adjacent-file access occurs. Both brokers must validate the active grant/attestation before touching the source.
+  Lark tests must require exactly one normalized document URL/token, pinned revision, `--as user`, JSON response, an allowlisted Docx raw-content GET argv, trusted revision-before/after evidence, no shell, no redirects/fallback principal, a cleared credential-leaking environment, timeout, and byte ceiling. Local-session tests must require one exact granted file and byte/range bounds; they must prove no directory enumeration or adjacent-file access occurs. Both brokers must validate the active grant/attestation before touching the source.
 
 - [x] **Step 4: Implement broker command construction and bounded reads**
 
@@ -173,11 +173,11 @@ The first native session target is Codex because it exercises the local CLI-sess
 
 - [x] **Step 2: Capture one minimized redacted compatibility fixture**
 
-  Invoke only the approved read through the Task 4 redaction boundary. `docs +fetch` is excluded because it may attach comment content outside the selected scope; use the official Docx raw-content GET endpoint through `lark-cli api GET`. Store no raw source or observed content in the repository. Produce a fully synthetic fixture that preserves only the observed response keys/types, and record the CLI version, response-schema fingerprint, pinned revision, redaction transform, and loss inventory.
+  Invoke only the approved read through the bounded transport-decoder and Task 4 redaction boundary. `docs +fetch` is excluded because it may attach comment content outside the selected scope; use the official Docx raw-content GET endpoint through `lark-cli api GET`. Strictly decode the closed transport envelope, then send only decoded `data.content` to the redactor so JSON escapes cannot bypass detection. Store no raw source or observed content in the repository. Produce a fully synthetic fixture that preserves only the observed response keys/types, and record the CLI version, response-schema fingerprint, pinned revision, redaction transform, and loss inventory.
 
 - [x] **Step 3: Write the parser tests before implementation**
 
-  Cover the exact `ok/identity/data.content` CLI envelope, owner/author resolution, pinned revision and source/locator binding, non-user identity, unknown/missing/duplicate fields, malformed JSON, over-limit payloads, schema drift, and diagnostic redaction. Expected canonical documents must enumerate the single retained raw-content block and every fidelity loss.
+  Cover the exact `ok/identity/data.content` CLI envelope, JSON escape decoding before redaction, owner/author resolution, pinned revision and source/locator binding, non-user identity, unknown/missing/duplicate fields, malformed JSON, over-limit payloads, schema drift, typed document-to-snapshot composition, and diagnostic redaction. Expected canonical documents must enumerate the single retained raw-content block and every fidelity loss.
 
 - [x] **Step 4: Implement only the observed allowlisted tuple**
 
@@ -187,7 +187,7 @@ The first native session target is Codex because it exercises the local CLI-sess
 
   Run: `python3 -m unittest tests.test_lark_adapter tests.test_brokers tests.test_sources -v`
 
-  Expected: 100% PASS. Change only the exact tested Lark tuple from `blocked` to `supported`; list all remaining unsupported cases.
+  Expected: 100% PASS. Change only the exact tested Lark tuple from `blocked` to `normalizer-supported`; keep trusted ingestion blocked and list all remaining unsupported cases.
 
 ### Task 6: Unblock and implement the version-pinned Codex local-session adapter
 

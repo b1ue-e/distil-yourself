@@ -83,9 +83,12 @@ The canonical-document validator has a separate closed tuple registry:
 | `synthetic` | `1.0.0` | `synthetic-1` | `synthetic-1` | conformance fixtures |
 | `lark` | `1.0.0` | `1.0.86` | `docx-v1-raw-content-v1` | pure raw-content normalizer only |
 
-The Lark tuple accepts only already-authorized, deterministically redacted bytes
-for canonical-document normalization. It does not enable event graphs, source
-reads, credential handling, persistence, traversal, or trusted ingestion.
+The Lark transport decoder first validates the exact closed JSON envelope and
+returns only decoded `data.content`; this step must precede redaction so JSON
+escapes cannot reconstruct secrets afterward. The Lark semantic normalizer then
+accepts only authenticated deterministic redaction output. The tuple does not
+enable event graphs, source reads, credential handling, persistence, traversal,
+or trusted ingestion.
 
 ### Owner object
 

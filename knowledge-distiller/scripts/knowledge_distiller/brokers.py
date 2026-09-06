@@ -1,13 +1,14 @@
 """Exact, read-only source acquisition through explicitly trusted boundaries.
 
 No production launcher, credential discovery, or native adapter is provided.
-The injected Lark launcher must enforce the requested timeout/stream byte limit
+The injected Lark launcher must execute only the Docx raw-content GET, enforce
+the requested timeout/stream byte limit
 (including stderr, raising BufferError before retaining excess bytes),
 pin the endpoint/TLS identity, forbid redirects and principal fallback, and
-produce LarkResponse evidence (including JSON transport type) from authenticated
-transport state, never document fields. Response bytes remain opaque; syntax and
-native content validation belong to the isolated parser. Installed help
-establishes argv only, not a trusted response schema.
+produce LarkResponse evidence (including JSON transport type and metadata
+revision-before/after) from authenticated transport state, never document body
+fields. Response bytes remain opaque; syntax and native content validation belong
+to the isolated parser.
 Credential variable names are declared by that launcher integration; this module
 does not claim any particular environment variable is supported by lark-cli.
 
@@ -162,7 +163,7 @@ def _snapshot(raw: bytes, context, evidence: NativeEvidence) -> BrokerSnapshot:
                           len(raw), evidence)
 
 
-def _lark_request(request, context) -> None:
+def _lark_request(request, context) -> str:
     _closed(request, LarkRequest, "invalid-broker-request")
     # Only normalized docx URLs or one opaque alphanumeric document token.
     # No wiki indirection, query, fragment, alternate port, userinfo, or aliases.
@@ -180,6 +181,7 @@ def _lark_request(request, context) -> None:
     if (context.session_range is not None or selector != context.selector
             or request.revision != context.revision):
         raise BrokerError("authorization-context-mismatch")
+    return selector.rsplit("/", 1)[-1]
 
 
 def _credentials(resolver, required_variables, context) -> dict:
@@ -233,11 +235,12 @@ def fetch_lark(request: LarkRequest, *, grant: authorization.ContentGrant,
     verified identity, redirect, or revision evidence and is always rejected.
     """
     _authorize(grant, attestation, context)
-    _lark_request(request, context)
+    document_token = _lark_request(request, context)
     env = _credentials(credential_resolver, required_auth_variables, context)
-    argv = ("lark-cli", "docs", "+fetch", "--doc", request.selector,
-            "--scope", "full", "--detail", "with-ids", "--format", "json",
-            "--as", "user", "--revision-id", request.revision)
+    argv = (
+        "lark-cli", "api", "GET",
+        "/open-apis/docx/v1/documents/" + document_token + "/raw_content",
+        "--as", "user")
     try:
         response = runner(argv, env=env, shell=False, timeout=30, max_bytes=MAX_GRAPH_BYTES,
                           allow_redirects=False, allow_fallback_principal=False)

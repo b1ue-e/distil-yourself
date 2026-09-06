@@ -3,8 +3,10 @@
 The Lark v1 path intentionally targets the official Docx raw-content GET
 response rather than ``docs +fetch``. The shortcut may attach visible comment
 content, while the selected source grant excludes comments. A caller must bind
-the exact current revision before and after acquisition and redact the opaque
-response bytes before invoking this pure normalizer.
+the exact current revision before and after acquisition. The bounded transport
+decoder validates the closed CLI envelope, then only decoded ``data.content``
+enters the redactor; the semantic normalizer consumes authenticated redaction
+output.
 
 Raw content exposes neither native block structure nor per-block authorship.
 Accordingly the canonical document contains one synthetic raw-content block,
@@ -38,8 +40,25 @@ def _fail(code="native-adapter-invalid"):
     raise NativeAdapterError(code)
 
 
+class _Closed(type):
+    def __call__(cls, *args, **kwargs):
+        try:
+            return super().__call__(*args, **kwargs)
+        except NativeAdapterError:
+            raise
+        except Exception:
+            _fail()
+
+
+def _revision(value):
+    if (type(value) is not str or len(value) > 20
+            or re.fullmatch(r"(?:0|[1-9][0-9]*)", value) is None):
+        _fail("invalid-revision")
+    return value
+
+
 @dataclass(frozen=True, repr=False)
-class LarkNormalizationContext:
+class LarkNormalizationContext(metaclass=_Closed):
     expected_owner_id: str
     expected_source_snapshot_id: str
     expected_revision: str
@@ -50,24 +69,33 @@ class LarkNormalizationContext:
         try:
             adapters._identifier(self.expected_owner_id, "/")
             adapters._snapshot(self.expected_source_snapshot_id, "/")
-            adapters._identifier(self.native_document_id, "/")
-            if (type(self.expected_revision) is not str
-                    or re.fullmatch(r"(?:0|[1-9][0-9]*)", self.expected_revision) is None):
-                _fail("invalid-revision")
+            adapters._snapshot(self.native_document_id, "/")
+            _revision(self.expected_revision)
             if self.product_version != LARK_RAW_CONTENT_ADAPTER.product_version:
                 _fail("unsupported-adapter-version")
         except adapters.GraphValidationError as error:
             _fail(error.code)
 
 
-def _record(value, cls):
-    if type(value) is not cls or set(vars(value)) != {item.name for item in fields(cls)}:
-        _fail()
+def decode_lark_raw_content(raw):
+    """Validate the exact CLI transport envelope and return decoded content bytes."""
     try:
-        return cls(**vars(value))
+        payload = adapters.decode_event_graph_json(raw)
+        payload = adapters._object(payload, _ROOT_FIELDS, "/")
+        if payload["ok"] is not True:
+            _fail("native-response-error")
+        if type(payload["identity"]) is not str or payload["identity"] != "user":
+            _fail("native-identity-mismatch")
+        data = adapters._object(payload["data"], _DATA_FIELDS, "/")
+        content = adapters._string(
+            data["content"], "/", 0, redaction.MAX_INPUT_BYTES,
+            "input-limit")
+        return content.encode("utf-8")
     except NativeAdapterError:
         raise
-    except Exception:
+    except adapters.GraphValidationError as error:
+        raise NativeAdapterError(error.code) from None
+    except (TypeError, ValueError, UnicodeError, RecursionError):
         _fail()
 
 
@@ -75,8 +103,7 @@ def lark_native_locator_digest(native_document_id, revision):
     """Bind the privacy-preserving document identifier to one revision."""
     try:
         adapters._snapshot(native_document_id, "/")
-        if type(revision) is not str or re.fullmatch(r"(?:0|[1-9][0-9]*)", revision) is None:
-            _fail("invalid-revision")
+        _revision(revision)
     except adapters.GraphValidationError as error:
         _fail(error.code)
     raw = b"knowledge-distiller:lark-raw-content:v1\x00" + native_document_id.encode("ascii")
@@ -94,12 +121,20 @@ def normalize_lark_raw_content(result, *, context: LarkNormalizationContext,
     performs no I/O, credential discovery, traversal, retries, or fallback.
     """
     try:
-        context = _record(context, LarkNormalizationContext)
+        if (type(context) is not LarkNormalizationContext
+                or set(vars(context)) != {
+                    item.name for item in fields(LarkNormalizationContext)}):
+            _fail()
+        context = LarkNormalizationContext(**vars(context))
         if (type(redaction_context) is not redaction.TrustContext
                 or set(vars(redaction_context)) != {item.name for item in fields(redaction.TrustContext)}):
             _fail("invalid-context")
         redaction_context = redaction.TrustContext(**vars(redaction_context))
-        binding = redaction.SpanBinding(**vars(expected_binding)) if type(expected_binding) is redaction.SpanBinding else _fail()
+        if (type(expected_binding) is not redaction.SpanBinding
+                or set(vars(expected_binding)) != {
+                    item.name for item in fields(redaction.SpanBinding)}):
+            _fail()
+        binding = redaction.SpanBinding(**vars(expected_binding))
         if (binding.source_snapshot_id != context.expected_source_snapshot_id
                 or binding.native_locator_digest != lark_native_locator_digest(
                     context.native_document_id, context.expected_revision)
@@ -112,14 +147,8 @@ def normalize_lark_raw_content(result, *, context: LarkNormalizationContext,
             expected_bindings=(binding,))
         if len(spans) != 1:
             _fail("invalid-context")
-        payload = adapters.decode_event_graph_json(spans[0].text.encode("utf-8"))
-        payload = adapters._object(payload, _ROOT_FIELDS, "/")
-        if payload["ok"] is not True:
-            _fail("native-response-error")
-        if type(payload["identity"]) is not str or payload["identity"] != "user":
-            _fail("native-identity-mismatch")
-        data = adapters._object(payload["data"], _DATA_FIELDS, "/")
-        content = adapters._string(data["content"], "/", 0, adapters.MAX_EVENT_BYTES)
+        content = adapters._string(
+            spans[0].text, "/", 0, adapters.MAX_EVENT_BYTES)
         canonical = {
             "schema_version": sources.DOCUMENT_SCHEMA,
             "adapter": {
