@@ -297,93 +297,79 @@ _PHONE = re.compile(r"(?<!\w)\+?[0-9][0-9 ()-]{5,30}[0-9](?!\w)")
 
 
 def _armor_suspicious(text, start, end):
-    """Recognize malformed private-key armor without treating prose as armor.
-
-    Armor-shaped lines start with at least three hyphens and fail closed when a
-    BEGIN/END token has a PRIVATE...KEY label. Bare lines have a stricter compact
-    label grammar, so narrative such as ``BEGIN rotating the private key`` stays
-    ordinary prose. Both walks use indexes and fixed ASCII word comparisons: no
-    regex search, normalization or unbounded line copy is needed.
-    """
+    """Recognize finite fenced and bare private-key candidates without copies."""
     def word(index, value):
         if index + len(value) > end:
             return False
         return all(text[index + offset] in (char, char.lower())
                    for offset, char in enumerate(value))
 
-    def marker(index):
-        if word(index, "BEGIN"):
-            return index + 5
-        if word(index, "END"):
-            return index + 3
-        return None
-
-    def private_key(index):
-        # The line ceiling also bounds the separator walk. Unicode letters are
-        # alphanumeric here, so confusables cannot become an ASCII KEY token.
-        while index < end:
-            if word(index, "PRIVATE"):
-                key = index + 7
-                separators = 0
-                while key < end and not text[key].isalnum():
-                    key += 1
-                    separators += 1
-                    if separators > MAX_ARMOR_LINE_CHARS:
-                        break
-                if separators <= MAX_ARMOR_LINE_CHARS and word(key, "KEY"):
-                    return True
-            index += 1
+    def private_then_key(left, right):
+        private = False
+        while left < right:
+            if private and word(left, "KEY"):
+                return True
+            if word(left, "PRIVATE"):
+                private = True
+            left += 1
         return False
 
-    index = start
-    while index < end and text[index].isspace():
-        index += 1
-    hyphens = index
-    while index < end and text[index] == "-":
-        index += 1
-    if index - hyphens >= 3:
-        marker_end = marker(index)
-        if marker_end is None:
-            return False
-        # BEGINNING is prose, but BEGINPRIVATE is malformed armor.
-        if marker_end < end and text[marker_end].isalnum() and not word(marker_end, "PRIVATE"):
-            return False
-        return private_key(marker_end)
+    # A whole-line fence alone establishes the candidate boundary; deliberately
+    # do not repair or depend on BEGIN/END spelling inside that boundary.
+    left, right = start, end
+    while left < right and text[left] in " \t\r":
+        left += 1
+    while right > left and text[right - 1] in " \t\r":
+        right -= 1
+    fence_start = left
+    while left < right and text[left] == "-":
+        left += 1
+    fence_end = right
+    while right > left and text[right - 1] == "-":
+        right -= 1
+    if left - fence_start >= 3 and fence_end - right >= 3:
+        return private_then_key(left, right)
 
-    # One or two malformed leading hyphens retain the previous fail-closed bare
-    # behavior. Three or more are handled by the armor-shaped branch above.
-    marker_end = marker(index)
-    if marker_end is None or marker_end == end or text[marker_end].isalnum():
+    # Bare candidates must begin exactly with BEGIN/END and use a closed label
+    # sequence. This leaves ordinary imperative prose outside the grammar.
+    if word(start, "BEGIN"):
+        marker_end = start + 5
+    elif word(start, "END"):
+        marker_end = start + 3
+    else:
+        return False
+    if marker_end == end or text[marker_end].isascii() and text[marker_end].isalnum():
         return False
     tokens = []
-    index = marker_end
-    while index < end:
-        while index < end and not (text[index].isascii() and text[index].isalnum()):
-            index += 1
-        token_start = index
-        while index < end and text[index].isascii() and text[index].isalnum():
-            index += 1
-        if token_start == index:
+    left = marker_end
+    while left < end:
+        while left < end and not (text[left].isascii() and text[left].isalnum()):
+            left += 1
+        token_start = left
+        while left < end and text[left].isascii() and text[left].isalnum():
+            left += 1
+        if token_start == left:
             continue
-        if index - token_start > MAX_ARMOR_LINE_CHARS or len(tokens) == 4:
+        if left - token_start > MAX_ARMOR_LINE_CHARS or len(tokens) == 4:
             return False
-        tokens.append((token_start, index))
+        tokens.append((token_start, left))
 
     def token(index, value):
         token_start, token_end = tokens[index]
         return token_end - token_start == len(value) and word(token_start, value)
 
-    prefix = len(tokens) - 1
-    if prefix in (0, 1) and token(prefix, "PRIVATEKEY"):
-        return True
-    if prefix in (0, 1) and token(prefix, "PRIVATEKEYBLOCK"):
-        return True
-    prefix = len(tokens) - 2
-    if prefix in (0, 1) and token(prefix, "PRIVATE") and token(prefix + 1, "KEY"):
-        return True
-    prefix = len(tokens) - 3
-    return (prefix in (0, 1) and token(prefix, "PRIVATE") and token(prefix + 1, "KEY")
-            and token(prefix + 2, "BLOCK"))
+    if len(tokens) == 1:
+        return token(0, "PRIVATEKEY") or token(0, "PRIVATEKEYBLOCK")
+    if len(tokens) == 2:
+        return ((token(0, "PRIVATE") and token(1, "KEY"))
+                or (token(0, "PGP") and token(1, "PRIVATEKEYBLOCK"))
+                or (token(0, "RSA") or token(0, "EC") or token(0, "DSA")
+                    or token(0, "OPENSSH") or token(0, "ENCRYPTED")) and token(1, "PRIVATEKEY"))
+    if len(tokens) == 3:
+        return ((token(0, "RSA") or token(0, "EC") or token(0, "DSA")
+                 or token(0, "OPENSSH") or token(0, "ENCRYPTED"))
+                and token(1, "PRIVATE") and token(2, "KEY"))
+    return len(tokens) == 4 and token(0, "PGP") and token(1, "PRIVATE") and token(2, "KEY") and token(3, "BLOCK")
 
 
 class Redactor:
