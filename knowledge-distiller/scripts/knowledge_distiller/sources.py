@@ -140,7 +140,7 @@ def _identity(value: Any) -> adapters.AdapterIdentity:
     name = adapters._enum(value["name"], adapters.ADAPTER_NAMES, "/")
     versions = tuple(adapters._version(value[key], "/") for key in
                      ("adapter_version", "product_version", "native_schema_version"))
-    if (name,) + versions != adapters.SUPPORTED_ADAPTER:
+    if (name,) + versions not in adapters.SUPPORTED_DOCUMENT_ADAPTERS:
         _reject("unsupported-adapter-version")
     return adapters.AdapterIdentity(name, *versions)
 

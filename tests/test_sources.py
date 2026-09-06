@@ -139,14 +139,42 @@ class SourcesTest(unittest.TestCase):
         value["fidelity_losses"][0]["code"] = "omitted-owner-content"
         self.reject(value, "invalid-fidelity-loss")
 
-    def test_no_native_adapter_versions_are_added(self):
-        for name in ("lark", "codex", "claude-code", "trae"):
-            with self.subTest(name=name):
-                value = document_data()
-                value["adapter"]["name"] = name
-                self.reject(value, "unsupported-adapter-version")
+    def test_document_adapter_registry_accepts_only_the_pinned_lark_tuple(self):
+        value = document_data()
+        value["adapter"] = {
+            "name": "lark", "adapter_version": "1.0.0",
+            "product_version": "1.0.86",
+            "native_schema_version": "docx-v1-raw-content-v1",
+        }
+        value["blocks"][0]["author"] = {
+            "kind": "external", "id": None, "resolution": "unresolved",
+        }
+        value["blocks"][0]["claim_eligible"] = False
+        value["fidelity_losses"] = [{
+            "code": "non-semantic-formatting", "block_id": "block-1",
+            "native_fact": "formatting", "reason": "native-unavailable",
+        }]
+        document = self.validate(value)
+        snapshot = self.validate_snapshot(self.snapshot_data(value), value)
+        self.assertEqual(document.adapter, adapters.AdapterIdentity(
+            "lark", "1.0.0", "1.0.86", "docx-v1-raw-content-v1"))
+        self.assertEqual(snapshot.adapter, document.adapter)
+
+        invalid_adapters = (
+            {**value["adapter"], "adapter_version": "1.0.1"},
+            {**value["adapter"], "product_version": "1.0.87"},
+            {**value["adapter"], "native_schema_version": "docx-v1-raw-content-v2"},
+            {**value["adapter"], "name": "codex"},
+            {**value["adapter"], "name": "claude-code"},
+            {**value["adapter"], "name": "trae"},
+        )
+        for identity in invalid_adapters:
+            with self.subTest(identity=identity):
+                candidate = copy.deepcopy(value)
+                candidate["adapter"] = identity
+                self.reject(candidate, "unsupported-adapter-version")
                 with self.assertRaises(sources.SourceValidationError) as caught:
-                    self.validate_snapshot(self.snapshot_data(value), value)
+                    self.validate_snapshot(self.snapshot_data(candidate), candidate)
                 self.assertEqual(caught.exception.code, "unsupported-adapter-version")
 
     def session_data(self):

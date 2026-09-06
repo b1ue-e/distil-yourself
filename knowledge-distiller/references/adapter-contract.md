@@ -62,7 +62,7 @@ dynamic check permits non-ASCII text when the total remains below the ceiling.
 | `product_version` | yes | string | no | version string |
 | `native_schema_version` | yes | string | no | version string |
 
-The accepted tuple registry is closed:
+The accepted event-graph tuple registry is closed:
 
 | Adapter name | adapter_version | product_version | native_schema_version |
 | --- | --- | --- | --- |
@@ -72,8 +72,20 @@ The accepted tuple registry is closed:
 | `claude-code` | none | none | none |
 | `trae` | none | none | none |
 
-Only that synthetic tuple is accepted in this milestone; every native tuple
-allowlist is empty. Any other adapter/version tuple is rejected.
+Only that synthetic tuple is accepted for event graphs in this milestone; every
+native event-graph tuple allowlist is empty. Any other adapter/version tuple is
+rejected by the event-graph validator.
+
+The canonical-document validator has a separate closed tuple registry:
+
+| Document adapter | adapter_version | product_version | native_schema_version | Scope |
+| --- | --- | --- | --- | --- |
+| `synthetic` | `1.0.0` | `synthetic-1` | `synthetic-1` | conformance fixtures |
+| `lark` | `1.0.0` | `1.0.86` | `docx-v1-raw-content-v1` | pure raw-content normalizer only |
+
+The Lark tuple accepts only already-authorized, deterministically redacted bytes
+for canonical-document normalization. It does not enable event graphs, source
+reads, credential handling, persistence, traversal, or trusted ingestion.
 
 ### Owner object
 

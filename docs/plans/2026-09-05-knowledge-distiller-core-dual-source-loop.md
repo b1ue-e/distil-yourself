@@ -167,19 +167,19 @@ The first native session target is Codex because it exercises the local CLI-sess
 - Create: `tests/fixtures/adapters/lark/<product-version>/<schema-version>/expected-*.json`
 - Modify: `knowledge-distiller/references/adapter-compatibility.md`
 
-- [ ] **Step 1: Resolve the exact-current approval gate**
+- [x] **Step 1: Resolve the exact-current approval gate**
 
   Resolve only the user-provided exact Lark URL/token to its current immutable revision, verify the active user principal and content owner/authority, and bind the resulting `ContentGrant`/`AuthorityAttestation`. The current-resolution read is allowed only for that exact resource; the stored fixture must bind the returned numeric revision rather than `latest`. Do not inspect links, embeds, attachments, child documents, comments, or revision history unless separately selected.
 
-- [ ] **Step 2: Capture one minimized redacted compatibility fixture**
+- [x] **Step 2: Capture one minimized redacted compatibility fixture**
 
-  Invoke only the approved `lark-cli docs +fetch` read through the broker and Task 4 redaction boundary. Store no raw source in the repository. Produce a structurally complete fixture with content, personal identifiers, secrets, and tenant-specific locators replaced deterministically while preserving types, IDs/relations, optional-field presence, and schema shape. Record the observed CLI version, response-schema fingerprint, pinned revision, fixture digest, redaction transform version, and loss inventory.
+  Invoke only the approved read through the Task 4 redaction boundary. `docs +fetch` is excluded because it may attach comment content outside the selected scope; use the official Docx raw-content GET endpoint through `lark-cli api GET`. Store no raw source or observed content in the repository. Produce a fully synthetic fixture that preserves only the observed response keys/types, and record the CLI version, response-schema fingerprint, pinned revision, redaction transform, and loss inventory.
 
-- [ ] **Step 3: Write the parser tests before implementation**
+- [x] **Step 3: Write the parser tests before implementation**
 
-  Cover supported envelopes and block ordering, stable IDs, owner/author resolution, pinned revision and pre/post revision consistency, embeds remaining inert, permission/auth failure, unknown or missing fields, malformed JSON, over-limit payloads, mid-read changes, schema drift, and diagnostic redaction. Expected canonical documents must enumerate every retained block and fidelity loss.
+  Cover the exact `ok/identity/data.content` CLI envelope, owner/author resolution, pinned revision and source/locator binding, non-user identity, unknown/missing/duplicate fields, malformed JSON, over-limit payloads, schema drift, and diagnostic redaction. Expected canonical documents must enumerate the single retained raw-content block and every fidelity loss.
 
-- [ ] **Step 4: Implement only the observed allowlisted tuple**
+- [x] **Step 4: Implement only the observed allowlisted tuple**
 
   Parse the pinned fixture family into `CanonicalDocument`; reject every other product/native-schema tuple. Do not infer authorship or claim eligibility from document availability alone.
 

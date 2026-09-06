@@ -65,6 +65,8 @@ LOSS_FIELDS = frozenset({"code", "event_id", "native_fact", "reason"})
 
 ADAPTER_NAMES = frozenset({"synthetic", "lark", "codex", "claude-code", "trae"})
 SUPPORTED_ADAPTER = ("synthetic", "1.0.0", "synthetic-1", "synthetic-1")
+LARK_RAW_CONTENT_ADAPTER = ("lark", "1.0.0", "1.0.86", "docx-v1-raw-content-v1")
+SUPPORTED_DOCUMENT_ADAPTERS = frozenset((SUPPORTED_ADAPTER, LARK_RAW_CONTENT_ADAPTER))
 EVENT_TYPES = frozenset(
     {
         "message",

@@ -1,55 +1,61 @@
 # Adapter compatibility gate
 
-Retrieved: 2026-09-04
+Retrieved: 2026-09-06
 
 This matrix separates evidence that a product can expose history from evidence that
 Knowledge Distiller has a stable, versioned parse contract. Product capability is
-not adapter compatibility. No native product or schema version is supported yet.
-Supported native versions: none.
-All native reads and parsers remain disabled until an exact version passes the
-required conformance fixtures.
+not adapter compatibility. One narrow Lark raw-content normalizer is supported;
+trusted ingestion and every session adapter remain unavailable.
+Supported native versions: Lark / 1.0.0 / 1.0.86 / docx-v1-raw-content-v1 (normalizer only).
+All other native reads and parsers remain disabled until an exact version passes
+the required conformance fixtures.
 
-No real source was inspected. This gate used only official public documentation
-and locally installed command help/version output. It did not inspect Lark
-documents, session data or indexes, credentials, account metadata, or user
-content.
+The Lark row includes one explicitly authorized current-document compatibility
+probe. Raw content flowed directly into the deterministic redactor; only bounded
+schema fields, counts, and digests were emitted, and no observed content or
+tenant locator was retained in repository fixtures. No session data or indexes
+were inspected.
 
 | Adapter | Readiness | Locally observed client | Product capability evidence | Stable parse-contract evidence |
 | --- | --- | --- | --- | --- |
-| Lark | `blocked` | `lark-cli 1.0.86` | `docs +fetch` accepts one exact document URL/token, an explicit principal, a revision, bounded scopes, and JSON output. | No documented metadata-only discovery contract, immutable snapshot guarantee, or supported response schema/version. |
+| Lark | `normalizer-supported` | `lark-cli 1.0.86` | Official Docx GET APIs expose current revision and raw text without fetching comment content. | Exact CLI envelope `ok/identity/data.content`, revision sandwich, synthetic fixture, and redaction/normalization tests pass for `docx-v1-raw-content-v1`; trusted ingestion remains blocked. |
 | Codex | `blocked` | `codex-cli 0.153.0` | Sessions can be resumed or forked; a running `codex exec --json` emits NDJSON events. | The cited interface does not specify a stable export API/schema for stored transcripts. |
 | Claude Code | `blocked` | Executable unavailable through the local shim. | Official docs describe local JSONL transcripts and SDK session/message reads. | Public docs do not freeze every native JSONL record needed for the canonical causality contract. |
 | Trae | `blocked` | `traecli 0.202.3(internal edition)` | TraeCode CLI help exposes resume by UUID/thread name and fork by UUID. | Neither command establishes a read/export schema; Trae Agent trajectory JSON is a different product boundary. |
 
-`blocked` is the only readiness value in this milestone. It means no native read
-may occur and no product or native schema version may be accepted by an adapter.
+`normalizer-supported` means only that already-authorized, already-redacted bytes
+for the exact tuple may enter the pure normalizer. It does not authorize a read,
+provide a production credential runner, persist evidence, or enable ingestion.
+`blocked` means no product/native schema tuple may be accepted by that adapter.
 
 ## Lark
 
-- **Official evidence:** the installed official `lark-cli docs +fetch --help`
-  interface. It is a content-read command, not permission to call it.
-- **Discovery/read interface:** no metadata-only discovery guarantee was
-  established. A future read would have to use one exact `--doc` URL/token;
-  supported selectors advertised by help are `full`, `outline`, `range`,
-  `keyword`, and `section`, with JSON output.
-- **Principal binding:** `--as user|bot` is an explicit request identity flag, but
-  the help does not establish stable principal binding in the result or snapshot.
-  Knowledge Distiller requires a verified user identity; bot or
-  implicit/default-principal fallback is forbidden.
-- **Revision/append semantics:** `--revision-id` accepts a revision, with `-1` meaning
-  latest. The help does not establish an immutable snapshot/watermark contract
-  or stable schema for every response needed by the canonical graph.
-- **Missing guarantee:** no supported native response-schema version exists and
-  no proof exists that metadata discovery can suppress snippets/body previews.
-- **Fixtures required to unblock:** version-pinned synthetic response envelopes
-  for every allowed scope, user-identity binding, revision pinning and latest
-  races, embeds/links remaining untraversed, permission denial, authentication
-  failure, malformed/changed envelopes, and attempted mutation. Expected output
-  must enumerate the complete canonical graph or rejection.
+- **Official evidence:** [get document metadata](https://open.feishu.cn/document/server-docs/docs/docs/docx-v1/document/get) and [get raw content](https://open.feishu.cn/document/server-docs/docs/docs/docx-v1/document/raw_content) specify read-only Docx v1 GET endpoints and `docx:document:readonly`. Installed `lark-cli 1.0.86` exposes them through `api GET` with explicit `--as user`.
+- **Discovery/read interface:** resolve one explicitly selected Wiki node to one
+  `docx` object, then call only `GET /open-apis/docx/v1/documents/:id` and
+  `GET /open-apis/docx/v1/documents/:id/raw_content`. `docs +fetch` is excluded
+  because it may attach visible comment content. Links, embeds, attachments,
+  child nodes, comments, and history are never followed.
+- **Principal binding:** verified user identity, Wiki creator, and Wiki owner must
+  match before content access. The observed CLI envelope must contain the exact
+  literal `identity=user`; bot, auto, or fallback identities fail closed.
+- **Revision/append semantics:** read current `revision_id`, capture raw content,
+  then read `revision_id` again. Both must equal the approved canonical decimal
+  revision. The observed compatibility probe remained at revision `3365`.
+- **Missing guarantee:** the raw-content endpoint exposes no native block graph or
+  per-block author. The v1 normalizer therefore emits one synthetic block,
+  records non-semantic formatting loss, and marks it unresolved and
+  claim-ineligible. A production authorization/credential runner and private
+  ingestion transaction remain Task 7 work.
+- **Fixtures required to unblock:** the exact normalizer tuple is covered by a
+  fully synthetic observed-shape fixture and expected canonical output. Rich
+  block schemas, other CLI versions/envelopes, comments, history, and every
+  implicit traversal remain blocked and require separate fixtures/approval.
 - **Failure behavior:** fail closed on an absent binary, non-user or ambiguous
-  identity, missing exact selector/revision, auth or permission failure, unknown
-  response field/schema, preview-bearing discovery, or any mutation path. Do not
-  retry with a different principal, broaden a selector, or echo content.
+  identity, owner mismatch, revision change, unknown/missing/duplicate response
+  fields, malformed JSON, unvalidated redaction output, resource limits, or any
+  mutation path. Never retry under another principal, broaden the selector, or
+  echo content.
 
 ## Codex
 
