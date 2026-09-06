@@ -342,6 +342,12 @@ class RedactionTest(unittest.TestCase):
         for candidate in ("--- PRIVATE KEY discussion", "PRIVATE KEY discussion ---", "--- PRIVATE KEY discussion ---"):
             with self.subTest(candidate=candidate):
                 self.reject(lambda: self.run_text(candidate, one_byte=True), "invalid-private-key")
+        for middle in ("é", "中"):
+            payload = "SYNTHETIC_UNICODE_FENCED_PAYLOAD"
+            with self.subTest(middle=middle):
+                error = self.reject(lambda middle=middle: self.run_text(
+                    "--- PRIVATE " + middle + " KEY ---\n" + payload, one_byte=True), "invalid-private-key")
+                self.assertNotIn(payload, repr(error))
         allowed = self.context(allowlist=("--- PRIVATE KEY ---",))
         self.reject(lambda: self.run_text("--- PRIVATE KEY ---", context=allowed, one_byte=True),
                     "invalid-private-key")

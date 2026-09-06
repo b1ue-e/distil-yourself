@@ -432,7 +432,9 @@ def _armor_matches(text, add):
         if not char.isascii() and char.isalnum():
             line_unicode = True
             begin_index = end_index = private_index = key_index = 0
-            private_ready = marker_pending = False
+            # A Unicode letter cannot complete an ASCII token, but it must not
+            # erase a completed PRIVATE before a later ASCII KEY.
+            marker_pending = False
             continue
         begin_index = advance(begin_index, "BEGIN", char)
         end_index = advance(end_index, "END", char)
