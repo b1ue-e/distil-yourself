@@ -290,6 +290,20 @@ class RedactionTest(unittest.TestCase):
         self.reject(lambda: self.run_text("-----BEGIN PRIVATE" + "-" * r.MAX_ARMOR_LINE_CHARS + "KEY-----"),
                     "invalid-private-key")
 
+    def test_fenced_interrupted_armor_tokens_fail_closed(self):
+        payload = "SENSITIVE_INTERRUPTED_ARMOR_PAYLOAD"
+        for delimiter in ("-----BEGIN PRI.VATE KE.Y-----",
+                          "-----BEG🙂IN PRI🙂VATE K🙂EY-----",
+                          "-----BEGéIN PRIéVATE KE中Y-----",
+                          "-----BEGIN PRI.VATE KEY-----",
+                          "-----BEGIN PRIVATE KE.Y-----"):
+            with self.subTest(delimiter=delimiter):
+                error = self.reject(lambda delimiter=delimiter: self.run_text(
+                    delimiter + "\n" + payload, one_byte=True), "invalid-private-key")
+                self.assertNotIn(payload, repr(error))
+        self.assertEqual(self.run_text("BEGIN PRI.VATE KE.Y", one_byte=True)[0].text,
+                         "BEGIN PRI.VATE KE.Y")
+
     def test_split_private_key_delimiters_fail_closed(self):
         payload = "SYNTHETIC_PRIVATE_MATERIAL"
         for opening, closing in (("-----BEGIN PRIVATE", "KEY-----"),

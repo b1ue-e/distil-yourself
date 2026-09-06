@@ -29,6 +29,7 @@ import hashlib
 import hmac
 import json
 import re
+import unicodedata
 from typing import Optional, Tuple
 
 MAX_INPUT_BYTES = 1024 * 1024
@@ -363,8 +364,9 @@ def _armor_matches(text, add):
     fence_seen = False
     line_start = 0
     line_leading_hyphens = 0
+    line_marker_open = True
     line_prefix = True
-    line_marker_fragment = line_private = line_key = line_unicode = False
+    line_interrupted = line_marker_fragment = line_private = line_key = line_unicode = False
     begin_index = end_index = private_index = key_index = 0
     private_ready = marker_pending = False
 
@@ -375,9 +377,21 @@ def _armor_matches(text, add):
             return index + 1
         return 1 if char == value[0] or char == value[0].lower() else 0
 
+    def continues(index, value, char):
+        if not index or char in " \t\r\n-_/":
+            return bool(index)
+        if char in (value[index], value[index].lower()):
+            return True
+        if not char.isascii():
+            # A confusable replacement cannot form an ASCII token, but it
+            # remains the established prose exception for that expected letter.
+            decomposed = unicodedata.normalize("NFKD", char)
+            return decomposed[:1] in (value[index], value[index].lower())
+        return False
+
     def finish_line(line_end):
         nonlocal active, exact_delimiters, partial_count, fence_seen
-        nonlocal line_leading_hyphens, line_marker_fragment, line_private, line_key, line_unicode
+        nonlocal line_interrupted, line_leading_hyphens, line_marker_fragment, line_private, line_key, line_unicode
         nonlocal marker_pending
         trimmed_start, trimmed_end = line_start, line_end
         while trimmed_start < trimmed_end and text[trimmed_start] in " \t\r":
@@ -390,6 +404,8 @@ def _armor_matches(text, add):
         line_fence = line_leading_hyphens >= 3 or trimmed_end - trailing >= 3
         if line_fence:
             fence_seen = True
+            if line_interrupted:
+                _fail("invalid-private-key")
             if (line_private or line_key) and line_end - line_start > MAX_ARMOR_LINE_CHARS:
                 _fail("invalid-private-key")
         if not line_unicode and line_marker_fragment:
@@ -420,7 +436,8 @@ def _armor_matches(text, add):
             line_start = position + 1
             line_leading_hyphens = 0
             line_prefix = True
-            line_marker_fragment = line_private = line_key = line_unicode = False
+            line_marker_open = True
+            line_interrupted = line_marker_fragment = line_private = line_key = line_unicode = False
             continue
         if line_prefix:
             if char in " \t\r":
@@ -429,6 +446,13 @@ def _armor_matches(text, add):
                 line_leading_hyphens += 1
             else:
                 line_prefix = False
+        marker_partial = line_marker_open and (begin_index >= 2 or end_index >= 2)
+        if ((marker_partial or private_index >= 2 or key_index >= 2)
+                and not (continues(begin_index if line_marker_open else 0, "BEGIN", char)
+                         or continues(end_index if line_marker_open else 0, "END", char)
+                         or continues(private_index, "PRIVATE", char)
+                         or continues(key_index, "KEY", char))):
+            line_interrupted = True
         if not char.isascii() and char.isalnum():
             line_unicode = True
             begin_index = end_index = private_index = key_index = 0
@@ -436,13 +460,17 @@ def _armor_matches(text, add):
             # erase a completed PRIVATE before a later ASCII KEY.
             marker_pending = False
             continue
-        begin_index = advance(begin_index, "BEGIN", char)
-        end_index = advance(end_index, "END", char)
+        if line_marker_open:
+            begin_index = advance(begin_index, "BEGIN", char)
+            end_index = advance(end_index, "END", char)
+            if begin_index == 5 or end_index == 3:
+                marker_pending = True
+                line_marker_open = False
+                begin_index = end_index = 0
+            elif char not in " \t\r\n-_/" and not begin_index and not end_index:
+                line_marker_open = False
         private_index = advance(private_index, "PRIVATE", char)
         key_index = advance(key_index, "KEY", char)
-        if begin_index == 5 or end_index == 3:
-            marker_pending = True
-            begin_index = end_index = 0
         if private_index == 7:
             line_private = True
             private_ready = True
