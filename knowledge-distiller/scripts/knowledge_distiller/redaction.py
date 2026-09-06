@@ -289,9 +289,6 @@ def validate_redaction_result(result, *, context: TrustContext, key: bytes) -> T
 _PRIVATE_KEY_LABELS = frozenset(("PRIVATE KEY", "RSA PRIVATE KEY", "EC PRIVATE KEY", "DSA PRIVATE KEY",
                                "OPENSSH PRIVATE KEY", "ENCRYPTED PRIVATE KEY", "PGP PRIVATE KEY BLOCK"))
 _ARMOR_DELIMITER = re.compile(r"-----(BEGIN|END) ([A-Z0-9 ]{1,64})-----")
-_ARMOR_MARKER = re.compile(r"[\s_-]*(?ai:BEGIN|END)(?=[\s_-])")
-_ARMOR_LABEL_PAIR = re.compile(r"(?<![A-Za-z0-9])(?ai:PRIVATE)[\s_-]+(?ai:KEY)(?![A-Za-z0-9])")
-_ARMOR_LABEL_END = re.compile(r"(?<![A-Za-z0-9])(?ai:PRIVATE)[\s_-]+(?ai:KEY)(?:[\s_-]+(?ai:BLOCK))?[\s_-]*\Z")
 _ASSIGN = re.compile(r"(?i)(?<![^\W_])(?:password|passwd|pwd|secret|secret[_-]access[_-]key|client_secret|token|api[_-]?key|api[_-]?token|session(?:[_-]?token|[_-]?id)?|access[_-]?token|refresh[_-]?token)[\"']?[ \t]{0,32}[:=][ \t]{0,32}")
 _BEARER = re.compile(r"(?i)(?<!\w)bearer[ \t]{1,32}")
 _COOKIE = re.compile(r"(?im)^[ \t]{0,32}(?:set-cookie|cookie)[ \t]{0,32}:[ \t]{0,32}")
@@ -300,15 +297,45 @@ _PHONE = re.compile(r"(?<!\w)\+?[0-9][0-9 ()-]{5,30}[0-9](?!\w)")
 
 
 def _armor_suspicious(line):
-    # Recognition only: whitespace/hyphen/underscore separators never repair an
-    # invalid envelope. Case matching stays ASCII, excluding Unicode confusables.
-    # Bare BEGIN/END lines must end in PRIVATE KEY [BLOCK]; continuation prose
-    # such as "begin private key rotation safely" is not a delimiter. Dashed
-    # private-key-looking lines remain suspicious even with broken marker words.
-    # These lexical scans are linear over the already bounded source. They make
-    # no normalized line copy; the delimiter length gate runs before strip/fullmatch.
-    return ((_ARMOR_MARKER.match(line) is not None and _ARMOR_LABEL_END.search(line) is not None)
-            or ("---" in line and _ARMOR_LABEL_PAIR.search(line) is not None))
+    """Recognize only whole BEGIN/END lines; never repair their envelope.
+
+    Scan in linear time with constant state. Only fixed words (at most seven
+    ASCII characters) are case-normalized, never an unbounded label/line.
+    PRIVATEKEY and separated variants are suspicious; narrative suffixes and
+    text without a line-start BEGIN/END token are not. Exact parsing below still
+    requires the supported spelling, delimiters and matching END label.
+    """
+    def separator(char):
+        return char.isspace() or char in "-_"
+
+    def word(start, value):
+        fragment = line[start:start + len(value)]
+        return fragment.isascii() and fragment.upper() == value
+
+    start = 0
+    while start < len(line) and (line[start].isspace() or line[start] == "-"):
+        start += 1
+    if word(start, "BEGIN"):
+        start += 5
+    elif word(start, "END"):
+        start += 3
+    else:
+        return False
+    if start == len(line) or not separator(line[start]):
+        return False
+    end = len(line)
+    while end > start and separator(line[end - 1]):
+        end -= 1
+    if end - start >= 5 and word(end - 5, "BLOCK"):
+        end -= 5
+    for token in ("KEY", "PRIVATE"):
+        while end > start and separator(line[end - 1]):
+            end -= 1
+        if end - start < len(token) or not word(end - len(token), token):
+            return False
+        end -= len(token)
+    return all(separator(line[index]) or (line[index].isascii() and line[index].isalnum())
+               for index in range(start, end))
 
 
 class Redactor:
