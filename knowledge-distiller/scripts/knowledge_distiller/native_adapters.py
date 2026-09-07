@@ -145,8 +145,6 @@ def normalize_lark_raw_content(result, *, context: LarkNormalizationContext,
         spans = redaction.validate_redaction_result(
             result, context=redaction_context, key=redaction_key,
             expected_bindings=(binding,))
-        if len(spans) != 1:
-            _fail("invalid-context")
         content = adapters._string(
             spans[0].text, "/", 0, adapters.MAX_EVENT_BYTES)
         canonical = {

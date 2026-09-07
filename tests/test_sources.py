@@ -372,6 +372,27 @@ class SourcesTest(unittest.TestCase):
                     mock.patch.object(sources, "DocumentBlock", side_effect=AssertionError("normalization reached")):
                 self.reject(value, code)
 
+    def test_typed_document_limits_precede_wire_materialization(self):
+        document = self.validate(document_data())
+        for limit in ("MAX_DOCUMENT_BLOCKS", "MAX_DOCUMENT_ITEMS"):
+            with self.subTest(limit=limit), mock.patch.object(sources, limit, 0), \
+                    mock.patch.object(
+                        sources, "_typed_data",
+                        side_effect=AssertionError("wire materialization reached")):
+                with self.assertRaises(sources.SourceValidationError) as caught:
+                    sources.canonical_document_payload(document)
+                self.assertEqual(caught.exception.code, "document-resource-limit")
+        with mock.patch.object(sources, "MAX_DOCUMENT_ITEMS", 63):
+            payload = sources.canonical_document_payload(document)
+            self.validate(payload)
+        with mock.patch.object(sources, "MAX_DOCUMENT_ITEMS", 62):
+            with self.assertRaises(sources.SourceValidationError) as typed_error:
+                sources.canonical_document_payload(document)
+            with self.assertRaises(sources.SourceValidationError) as wire_error:
+                self.validate(document_data())
+        self.assertEqual(typed_error.exception.code, "document-resource-limit")
+        self.assertEqual(wire_error.exception.code, "document-resource-limit")
+
     def test_document_byte_limit_is_exact_for_unicode_and_json_escaping(self):
         value = document_data()
         value["blocks"][0]["content_segments"][0]["text"] = "界é😀\n\t\"\\\u0000"

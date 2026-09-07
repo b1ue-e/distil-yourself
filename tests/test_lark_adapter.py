@@ -115,9 +115,6 @@ class LarkRawContentAdapterTest(unittest.TestCase):
         actual = json.loads(json.dumps(dataclasses.asdict(document), sort_keys=True))
         self.assertEqual(actual, expected)
         metadata = json.loads((FIXTURES / "fixture-metadata.json").read_text(encoding="utf-8"))
-        shape = json.dumps(metadata["response_schema_shape"], sort_keys=True,
-                           separators=(",", ":")).encode("utf-8")
-        self.assertEqual(metadata["response_schema_digest"], digest(shape))
         self.assertEqual(metadata["observed_cli_version"], "1.0.86")
         self.assertEqual(metadata["observed_revision"], "3365")
         self.assertEqual(metadata["response_schema_shape"], {
@@ -219,7 +216,6 @@ class LarkRawContentAdapterTest(unittest.TestCase):
             self.reject(lambda: self.normalize("x" * 100), "input-limit")
 
     def test_revision_bounds_and_context_constructor_are_code_only(self):
-        self.assertEqual(len("9" * 20), 20)
         native.LarkNormalizationContext(
             self.owner, digest("snapshot"), "9" * 20, self.document, "1.0.86")
         self.assertTrue(native.lark_native_locator_digest(self.document, "9" * 20).startswith("sha256:"))

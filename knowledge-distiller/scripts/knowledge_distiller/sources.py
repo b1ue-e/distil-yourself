@@ -147,6 +147,26 @@ def _typed_data(value: Any, cls: type) -> dict:
     return {field.name: getattr(value, field.name) for field in fields(cls)}
 
 
+def _preflight_typed_document(document: CanonicalDocument) -> None:
+    if type(document.blocks) is not tuple or type(document.fidelity_losses) is not tuple:
+        _reject("invalid-type")
+    if len(document.blocks) > MAX_DOCUMENT_BLOCKS:
+        _reject("document-resource-limit")
+    # Exact item count of the wire payload produced below. A dict contributes
+    # its keys and values; list members contribute their contained records.
+    total = 31 + (9 * len(document.fidelity_losses))
+    if total > MAX_DOCUMENT_ITEMS:
+        _reject("document-resource-limit")
+    for item in document.blocks:
+        block = _typed_record(item, DocumentBlock)
+        if type(block.content_segments) is not tuple or type(block.artifact_locators) is not tuple:
+            _reject("invalid-type")
+        added = 23 + (9 * len(block.content_segments)) + (9 * len(block.artifact_locators))
+        if added > MAX_DOCUMENT_ITEMS - total:
+            _reject("document-resource-limit")
+        total += added
+
+
 def canonical_document_payload(value: CanonicalDocument) -> dict:
     """Return the strict input-schema form of a typed canonical document.
 
@@ -155,15 +175,12 @@ def canonical_document_payload(value: CanonicalDocument) -> dict:
     Every nested record and tuple is checked before conversion.
     """
     document = _typed_record(value, CanonicalDocument)
+    _preflight_typed_document(document)
     identity = _typed_data(document.adapter, adapters.AdapterIdentity)
     owner = _typed_data(document.owner, OwnerBinding)
-    if type(document.blocks) is not tuple or type(document.fidelity_losses) is not tuple:
-        _reject("invalid-type")
     blocks = []
     for item in document.blocks:
         block = _typed_record(item, DocumentBlock)
-        if type(block.content_segments) is not tuple or type(block.artifact_locators) is not tuple:
-            _reject("invalid-type")
         blocks.append({
             "id": block.id, "native_block_id": block.native_block_id,
             "parent_block_id": block.parent_block_id, "order": block.order,
