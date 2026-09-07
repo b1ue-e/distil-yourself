@@ -71,7 +71,7 @@ class SkillContractTest(unittest.TestCase):
             self.assertIn(f"references/{reference}", text)
             self.assertTrue((SKILL_DIR / "references" / reference).is_file())
 
-    def test_adapter_references_define_one_narrow_lark_normalizer_gate(self) -> None:
+    def test_adapter_references_define_narrow_lark_and_codex_gates(self) -> None:
         self.assertTrue(
             ADAPTER_COMPATIBILITY_FILE.is_file(),
             "references/adapter-compatibility.md must exist",
@@ -100,21 +100,25 @@ class SkillContractTest(unittest.TestCase):
         self.assertEqual(len({row["Adapter"] for row in rows}), 4)
         rows_by_adapter = {row["Adapter"]: row for row in rows}
         self.assertEqual(rows_by_adapter["Lark"]["Readiness"], "`normalizer-supported`")
+        self.assertEqual(rows_by_adapter["Codex"]["Readiness"], "`supported`")
         self.assertEqual({rows_by_adapter[name]["Readiness"] for name in
-                          ("Codex", "Claude Code", "Trae")}, {"`blocked`"})
+                          ("Claude Code", "Trae")}, {"`blocked`"})
         for row in rows:
             self.assertTrue(row["Locally observed client"])
             self.assertTrue(row["Product capability evidence"])
             self.assertTrue(row["Stable parse-contract evidence"])
         lower = text.lower()
-        self.assertIn("retrieved: 2026-09-06", lower)
-        self.assertIn("one narrow lark raw-content normalizer is supported", lower)
+        self.assertIn("retrieved: 2026-09-07", lower)
+        self.assertIn(
+            "one narrow lark raw-content normalizer and one codex rollout adapter are supported",
+            " ".join(lower.split()),
+        )
         self.assertEqual(
             re.findall(r"(?mi)^supported native versions:\s*(.+)$", text),
-            ["Lark / 1.0.0 / 1.0.86 / docx-v1-raw-content-v1 (normalizer only)."],
+            ["Lark / 1.0.0 / 1.0.86 / docx-v1-raw-content-v1 (normalizer only); Codex / 1.0.0 / 0.153.0 / rollout-jsonl-v1."],
         )
-        self.assertIn("no observed content or tenant locator", " ".join(lower.split()))
-        self.assertNotRegex(lower, r"readiness[^\n]*\| `(?:ready|supported|experimental)`")
+        self.assertIn("no observed content, path, session id, or tenant locator", " ".join(lower.split()))
+        self.assertNotRegex(lower, r"readiness[^\n]*\| `(?:ready|experimental)`")
         for adapter in ("Lark", "Codex", "Claude Code", "Trae"):
             section = text.split(f"## {adapter}\n", 1)[1].split("\n## ", 1)[0]
             for label in (
@@ -279,7 +283,7 @@ class SkillContractTest(unittest.TestCase):
         ):
             self.assertIn(requirement, normalized)
 
-    def test_adapter_contract_accepts_only_one_synthetic_tuple(self) -> None:
+    def test_adapter_contract_accepts_only_exact_event_tuples(self) -> None:
         text = ADAPTER_CONTRACT_FILE.read_text(encoding="utf-8")
         headers, rows = self.markdown_table(text, "| Adapter name |")
         self.assertEqual(
@@ -308,9 +312,9 @@ class SkillContractTest(unittest.TestCase):
                 },
                 {
                     "Adapter name": "`codex`",
-                    "adapter_version": "none",
-                    "product_version": "none",
-                    "native_schema_version": "none",
+                    "adapter_version": "`1.0.0`",
+                    "product_version": "`0.153.0`",
+                    "native_schema_version": "`rollout-jsonl-v1`",
                 },
                 {
                     "Adapter name": "`claude-code`",
@@ -499,17 +503,22 @@ class SkillContractTest(unittest.TestCase):
                     "contract and synthetic conformance harness exist",
                     text,
                 )
-                self.assertIn("one exact lark raw-content normalizer tuple is available", text)
-                self.assertIn("trusted ingestion", text)
-                self.assertIn("codex, claude code, and trae", text)
                 self.assertIn(
-                    "validation proves only that the graph conforms to the listed "
-                    "synthetic tuple and canonical contract",
+                    "one exact lark raw-content normalizer tuple and one exact codex "
+                    "rollout adapter tuple are available",
+                    text,
+                )
+                self.assertIn("trusted dual-source ingestion", text)
+                self.assertIn("claude code and trae", text)
+                self.assertIn(
+                    "validation proves only that the graph conforms to an allowlisted "
+                    "exact tuple and the canonical contract",
                     text,
                 )
                 self.assertIn("does not authorize a source read", text)
-                self.assertIn("does not authorize native tool invocation", text)
-                self.assertIn("does not make any native event-graph adapter supported", text)
+                self.assertIn("native tool invocation", text)
+                self.assertIn("directory enumeration", text)
+                self.assertIn("native readiness is defined separately", text)
 
     def test_readme_documents_cli_exit_code_categories(self) -> None:
         text = " ".join(README_FILE.read_text(encoding="utf-8").split())

@@ -199,23 +199,27 @@ The first native session target is Codex because it exercises the local CLI-sess
 - Create: `tests/fixtures/adapters/codex/<product-version>/<schema-version>/expected-*.json`
 - Modify: `knowledge-distiller/references/adapter-compatibility.md`
 
-- [ ] **Step 1: Stop at the real-content approval gate**
+- [x] **Step 1: Stop at the real-content approval gate**
 
   Ask for one exact Codex session file or supported export selector and an immutable prefix/range. Do not use `--last`, pickers, `--all`, session-directory enumeration, sibling sessions, resume, fork, or mutation as a read mechanism.
 
-- [ ] **Step 2: Capture one minimized redacted native fixture**
+  Completion note: the user explicitly broadened the one-time compatibility probe to both local Codex session roots. The probe emitted aggregate counts only; production acquisition remains constrained to one exact granted descriptor and immutable byte-0 prefix per snapshot.
+
+- [x] **Step 2: Capture one minimized redacted native fixture**
 
   Read only the exact granted descriptor through the local broker and Task 4 redaction boundary. Pin product and native-schema fingerprints, byte prefix length, prefix digest, owner/principal binding evidence, and redaction transform. Exclude later appends from the snapshot; reject a changing or truncated prefix.
 
-- [ ] **Step 3: Write complete causality conformance tests**
+  Completion note: authorized exact prefixes were replayed only in bounded memory. No native content, path, or session identifier was retained; the checked-in `redacted-current.jsonl` is a fully synthetic minimized fixture with separate aggregate-only observation metadata.
+
+- [x] **Step 3: Write complete causality conformance tests**
 
   Cover messages, tools/chunks/results, edits/retries/supersession, compaction, forks, nested agents, cross-agent delivery, owner attribution, partial final lines, duplicate or missing IDs, concurrent append/reorder/truncation, unsupported records, and unknown/mixed schema versions. Each accepted fixture must validate through the existing canonical event-graph validator.
 
-- [ ] **Step 4: Implement only the observed allowlisted tuple**
+- [x] **Step 4: Implement only the observed allowlisted tuple**
 
   Normalize native JSONL to the existing event graph without fabricating identity, order, or causality. Quarantine the entire root case if a decision-relevant relation cannot be represented.
 
-- [ ] **Step 5: Run conformance and update readiness precisely**
+- [x] **Step 5: Run conformance and update readiness precisely**
 
   Run: `python3 -m unittest tests.test_codex_adapter tests.test_adapters tests.test_brokers -v`
 

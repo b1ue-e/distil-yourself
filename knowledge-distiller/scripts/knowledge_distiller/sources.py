@@ -211,12 +211,13 @@ def canonical_document_payload(value: CanonicalDocument) -> dict:
     }
 
 
-def _identity(value: Any) -> adapters.AdapterIdentity:
+def _identity(value: Any, supported=None) -> adapters.AdapterIdentity:
     value = adapters._object(value, adapters.ADAPTER_FIELDS, "/")
     name = adapters._enum(value["name"], adapters.ADAPTER_NAMES, "/")
     versions = tuple(adapters._version(value[key], "/") for key in
                      ("adapter_version", "product_version", "native_schema_version"))
-    if (name,) + versions not in adapters.SUPPORTED_DOCUMENT_ADAPTERS:
+    supported = adapters.SUPPORTED_DOCUMENT_ADAPTERS if supported is None else supported
+    if (name,) + versions not in supported:
         _reject("unsupported-adapter-version")
     return adapters.AdapterIdentity(name, *versions)
 
@@ -408,7 +409,9 @@ def validate_source_snapshot(value: Any, *, payload: Any, raw_bytes: bytes,
             normalized_payload = canonical_document_payload(payload)
         validated = (_document(normalized_payload, context) if kind == "document" else
                      adapters.validate_event_graph(normalized_payload, context=context))
-        identity = _identity(manifest["adapter"])
+        identity = _identity(
+            manifest["adapter"], adapters.SUPPORTED_DOCUMENT_ADAPTERS
+            if kind == "document" else adapters.SUPPORTED_EVENT_ADAPTERS)
         owner = _owner(manifest["owner"], context.expected_owner_id)
         snapshot = adapters._snapshot(manifest["source_snapshot_id"], "/")
         for field in ("raw_digest", "canonical_digest", "payload_reference"):

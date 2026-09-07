@@ -1,0 +1,19 @@
+{
+  "observed_cli_version": "0.153.0",
+  "native_schema_version": "rollout-jsonl-v1",
+  "native_schema_digest": "sha256:88b2493a52624f56a617f99f386e45b3a724e04737913d6b161e67b672fe504c",
+  "authorized_roots": ["sessions", "archived_sessions"],
+  "observed_file_count": 83,
+  "observed_record_count": 47658,
+  "all_observed_json_lines_valid": true,
+  "all_0_153_0_ordinals_contiguous_from_zero": true,
+  "complete_current_files_supported_after_hardening": 0,
+  "supported_closed_prefix_file_count": 1,
+  "supported_closed_prefix_max_record_count": 9,
+  "supported_closed_prefix_max_event_count": 1,
+  "compatibility_probe_is_point_in_time": true,
+  "content_retained_from_observation": false,
+  "paths_or_session_ids_retained_from_observation": false,
+  "fixture_is_fully_synthetic": true,
+  "redaction_transform": "knowledge-distiller:redaction:v1"
+}

@@ -66,6 +66,8 @@ LOSS_FIELDS = frozenset({"code", "event_id", "native_fact", "reason"})
 ADAPTER_NAMES = frozenset({"synthetic", "lark", "codex", "claude-code", "trae"})
 SUPPORTED_ADAPTER = ("synthetic", "1.0.0", "synthetic-1", "synthetic-1")
 LARK_RAW_CONTENT_ADAPTER = ("lark", "1.0.0", "1.0.86", "docx-v1-raw-content-v1")
+CODEX_ROLLOUT_ADAPTER = ("codex", "1.0.0", "0.153.0", "rollout-jsonl-v1")
+SUPPORTED_EVENT_ADAPTERS = frozenset((SUPPORTED_ADAPTER, CODEX_ROLLOUT_ADAPTER))
 SUPPORTED_DOCUMENT_ADAPTERS = frozenset((SUPPORTED_ADAPTER, LARK_RAW_CONTENT_ADAPTER))
 EVENT_TYPES = frozenset(
     {
@@ -901,7 +903,8 @@ def validate_event_graph(value: Any, *, context: ValidationContext) -> EventGrap
         product_version=_version(adapter["product_version"], "/adapter/product_version"),
         native_schema_version=_version(adapter["native_schema_version"], "/adapter/native_schema_version"),
     )
-    if (identity.name, identity.adapter_version, identity.product_version, identity.native_schema_version) != SUPPORTED_ADAPTER:
+    if (identity.name, identity.adapter_version, identity.product_version,
+            identity.native_schema_version) not in SUPPORTED_EVENT_ADAPTERS:
         _reject("unsupported-adapter-version", "/adapter")
 
     snapshot_id = _snapshot(graph["source_snapshot_id"], "/source_snapshot_id")

@@ -1,32 +1,45 @@
 # Adapter compatibility gate
 
-Retrieved: 2026-09-06
+Retrieved: 2026-09-07
 
 This matrix separates evidence that a product can expose history from evidence that
 Knowledge Distiller has a stable, versioned parse contract. Product capability is
-not adapter compatibility. One narrow Lark raw-content normalizer is supported;
-trusted ingestion and every session adapter remain unavailable.
-Supported native versions: Lark / 1.0.0 / 1.0.86 / docx-v1-raw-content-v1 (normalizer only).
-All other native reads and parsers remain disabled until an exact version passes
-the required conformance fixtures.
+not adapter compatibility. One narrow Lark raw-content normalizer and one Codex
+rollout adapter are supported; the dual-source ingestion transaction remains Task 7.
+Supported native versions: Lark / 1.0.0 / 1.0.86 / docx-v1-raw-content-v1 (normalizer only); Codex / 1.0.0 / 0.153.0 / rollout-jsonl-v1.
+All other native tuples remain disabled until an exact version passes the required
+conformance fixtures.
 
 The Lark row includes one explicitly authorized current-document compatibility
 probe. CLI output flowed directly into a bounded in-memory probe; its closed
 transport envelope was decoded and only decoded content entered the deterministic
 redactor. Only bounded schema fields, counts, and digests were emitted, and no
-observed content or tenant locator was retained in repository fixtures. No
-session data or indexes were inspected.
+observed content or tenant locator was retained in repository fixtures.
+
+The user separately authorized a read-only compatibility probe over all local
+Codex active and archived session roots. The probe observed 83 regular JSONL
+files and 47,658 valid records without emitting content or locators. Repository
+fixtures retain no observed content, path, session ID, or tenant locator; they
+are fully synthetic. Of 48 complete files whose first session record pins
+`0.153.0`, none satisfy the final fail-closed adapter: all contain at least one
+unsupported causal or content projection. A bounded probe over exact,
+newline-closed prefixes found one supported root prefix of 9 records producing
+one canonical event. The 35 files from older versions remain blocked. These are
+point-in-time aggregate observations; live session roots may change.
 
 | Adapter | Readiness | Locally observed client | Product capability evidence | Stable parse-contract evidence |
 | --- | --- | --- | --- | --- |
 | Lark | `normalizer-supported` | `lark-cli 1.0.86` | Official Docx GET APIs expose current revision and raw text without fetching comment content. | Exact CLI envelope `ok/identity/data.content`, revision sandwich, synthetic fixture, and redaction/normalization tests pass for `docx-v1-raw-content-v1`; trusted ingestion remains blocked. |
-| Codex | `blocked` | `codex-cli 0.153.0` | Sessions can be resumed or forked; a running `codex exec --json` emits NDJSON events. | The cited interface does not specify a stable export API/schema for stored transcripts. |
+| Codex | `supported` | `codex-cli 0.153.0` | Official source defines persisted rollout lines and session roots; the CLI can resume/fork sessions. | Exact local closed-prefix broker, `rollout-jsonl-v1` synthetic fixture, redaction/normalization tests, and one authorized aggregate closed-prefix replay pass; complete files containing unsupported projections fail closed. |
 | Claude Code | `blocked` | Executable unavailable through the local shim. | Official docs describe local JSONL transcripts and SDK session/message reads. | Public docs do not freeze every native JSONL record needed for the canonical causality contract. |
 | Trae | `blocked` | `traecli 0.202.3(internal edition)` | TraeCode CLI help exposes resume by UUID/thread name and fork by UUID. | Neither command establishes a read/export schema; Trae Agent trajectory JSON is a different product boundary. |
 
 `normalizer-supported` means only that already-authorized, already-redacted bytes
 for the exact tuple may enter the pure normalizer. It does not authorize a read,
 provide a production credential runner, persist evidence, or enable ingestion.
+`supported` means the exact tuple has a read-only broker and pure normalizer that
+pass conformance; it does not enable the Task 7 ingestion CLI, install a skill,
+or authorize any future read.
 `blocked` means no product/native schema tuple may be accepted by that adapter.
 
 ## Lark
@@ -60,27 +73,40 @@ provide a production credential runner, persist evidence, or enable ingestion.
 
 ## Codex
 
-- **Official evidence:** [Codex CLI reference](https://developers.openai.com/codex/cli/reference).
-- **Discovery/read interface:** `codex resume` accepts a session UUID/name and
-  offers `--last`/`--all`; `fork` exists. `codex exec --json` describes NDJSON
-  events for a running task, not a stored-transcript export contract. Local
-  `codex resume --help` confirmed UUID/name and picker behavior.
-- **Principal binding:** the CLI operates in its current authenticated context,
-  but the cited interfaces do not provide the stable owner/principal binding
-  required for claim attribution in an exported session.
-- **Revision/append semantics:** resume and fork are product capabilities. No
-  stable session snapshot, append watermark, stored-event schema, or fork-edge
-  representation was established.
-- **Missing guarantee:** no supported stored-transcript schema/version or stable
-  stored-session read API exists for this adapter.
-- **Fixtures required to unblock:** version-pinned synthetic exports for resume,
-  fork, retries, edits, compaction, tool call/chunks/result, sub-agent lifecycle,
-  and cross-agent messages, plus concurrent append/truncation, identity ambiguity,
-  malformed NDJSON, unknown records, auth failure, and permission denial.
-- **Failure behavior:** fail closed on picker-only discovery, absent stable export,
-  unresolved owner, live append without a pinned snapshot, unknown record/schema,
-  gaps, or conflicting causal identifiers. Never scan session directories or
-  silently reinterpret `codex exec --json` as stored transcript export.
+- **Official evidence:** [Codex CLI reference](https://learn.chatgpt.com/docs/developer-commands?surface=cli), [version-pinned rollout line and item definitions](https://github.com/openai/codex/blob/rust-v0.153.0/codex-rs/history/src/lib.rs), and [version-pinned response item definitions](https://github.com/openai/codex/blob/rust-v0.153.0/codex-rs/protocol/src/models.rs).
+- **Discovery/read interface:** official source names `sessions` and
+  `archived_sessions`, but production acquisition does not use resume, pickers,
+  or directory scanning. The existing local broker opens one exact granted
+  regular-file descriptor and confirms one immutable prefix twice. The user's
+  broader all-session approval was used only for this bounded compatibility
+  inventory; a future collection command must still create one exact grant and
+  snapshot per file.
+- **Principal binding:** `SessionIdentity`, `ContentGrant`, and
+  `AuthorityAttestation` are external trust anchors. The parser never infers the
+  owner from paths, session metadata, or message text. Only a native user message
+  item classified `user.text` becomes a verified-owner claim-bearing event.
+- **Revision/append semantics:** `0.153.0` records carry ordinals. The adapter
+  requires one complete newline-terminated prefix, exactly one leading
+  `session_meta`, and ordinals contiguous from zero. The broker excludes later
+  appends and rejects prefix edits, reorder, truncation, links, and file changes.
+- **Missing guarantee:** forked histories, rollback/edit/retry/supersession, and
+  nested-agent lifecycle records are quarantined because their decision-relevant
+  parent edges cannot be proved from one file. Non-text tool outputs and extracted
+  text above the deterministic redactor's 1 MiB task limit are also rejected.
+  `ItemCompleted` and unclassified developer context are rejected rather than
+  presumed redundant. Versions other than `0.153.0` remain blocked.
+- **Fixtures required to unblock:** the checked-in fixture is fully synthetic but
+  preserves the observed outer line, session metadata, message metadata,
+  function-call/result, reasoning, compaction, ordinal, and decimal shapes.
+  Tests cover owner attribution, JSON-escape-before-redaction, tool pairing,
+  cross-agent quarantine, partial lines, duplicate/missing IDs, reorder,
+  concurrent-prefix protection, unknown/mixed schemas, fork, rollback, nested
+  agents, encrypted content loss, resource ceilings, and source snapshot binding.
+- **Failure behavior:** reject the entire session with a bounded code on unknown
+  fields/records, noncontiguous ordinals, unsupported versions/content/causality,
+  unpaired tools or communications, invalid redaction provenance, or source
+  change. Never echo source values, resume/fork a session, broaden a selector,
+  infer identity, or emit a best-effort partial graph.
 
 ## Claude Code
 

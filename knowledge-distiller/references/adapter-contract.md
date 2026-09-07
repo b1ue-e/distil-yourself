@@ -68,13 +68,16 @@ The accepted event-graph tuple registry is closed:
 | --- | --- | --- | --- |
 | `synthetic` | `1.0.0` | `synthetic-1` | `synthetic-1` |
 | `lark` | none | none | none |
-| `codex` | none | none | none |
+| `codex` | `1.0.0` | `0.153.0` | `rollout-jsonl-v1` |
 | `claude-code` | none | none | none |
 | `trae` | none | none | none |
 
-Only that synthetic tuple is accepted for event graphs in this milestone; every
-native event-graph tuple allowlist is empty. Any other adapter/version tuple is
-rejected by the event-graph validator.
+Only those exact synthetic and Codex tuples are accepted for event graphs in this
+milestone. The Codex tuple covers one complete, immutable, newline-terminated
+rollout prefix acquired by the read-only local broker and normalized by the pure
+version-pinned adapter. It does not authorize source discovery, directory
+enumeration, ingestion persistence, or future reads. Any other adapter/version
+tuple is rejected by the event-graph validator.
 
 The canonical-document validator has a separate closed tuple registry:
 
@@ -332,4 +335,5 @@ never modified.
 
 Conformance requires 100% agreement with expected graphs for version-pinned
 synthetic fixtures and any separately authorized redacted fixtures. Passing this
-contract does not authorize a source read or make a native adapter supported.
+contract does not authorize a source read; native readiness is listed separately
+in the compatibility gate and applies only to its exact tuple.

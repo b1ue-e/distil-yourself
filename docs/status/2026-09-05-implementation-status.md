@@ -4,20 +4,21 @@
 
 ## 当前结论
 
-`knowledge-distiller` 已完成既有 adapter-contract 里程碑，以及 core dual-source loop 的 Task 1–5：授权/source contracts、私有原子 artifact store、只读 source broker、deterministic pre-ingestion redaction，以及 version-pinned Lark raw-content normalizer。当前下一项为 Task 6 的 Codex local-session adapter。
+`knowledge-distiller` 已完成既有 adapter-contract 里程碑，以及 core dual-source loop 的 Task 1–6。Task 6 的 version-pinned Codex local-session adapter 已通过实现、回归和独立终审；下一项为 Task 7 dual-source ingestion。
 
-主进程最新严格完整测试为 299/299 通过；Task 5 Lark/broker/source conformance 为 45/45 通过，最终质量评审定向测试为 62/62 通过，`compileall` 与 `git diff --check` 通过。完整验证命令为：
+主进程最新严格完整测试为 313/313 通过；Task 6 计划指定 conformance gate 为 79/79，Codex/contract/source/broker 扩展定向回归为 113/113。独立规格终审为 `SPEC PASS`，独立质量终审为 `READY`，无 Critical/Important 遗留；终审后的 `compileall` 与 `git diff --check` 均通过。完整验证命令为：
 
 ```bash
 PYTHONWARNINGS=error python3 -m unittest discover -s tests -v
 ```
 
-精确 tuple `lark / 1.0.0 / 1.0.86 / docx-v1-raw-content-v1` 当前仅为 `normalizer-supported`；它不授权读取，也不代表 trusted ingestion 已完成。Codex、Claude Code、Trae session adapter 仍为 `blocked`。
+精确 tuple `lark / 1.0.0 / 1.0.86 / docx-v1-raw-content-v1` 为 `normalizer-supported`；`codex / 1.0.0 / 0.153.0 / rollout-jsonl-v1` 已进入 event-graph allowlist 并通过 conformance。二者均不授权未来读取，也不代表 trusted ingestion 已完成；Claude Code 与 Trae session adapter 仍为 `blocked`。
 
 ## 分支与提交
 
 - 当前分支：`feat/implement_knowledge_distiller`
-- 最新实现提交：`89edbe9 fix: bound typed document conversion`
+- 最新完成记录提交：`1996505 docs: complete Lark adapter milestone`
+- Task 6 当前为未提交工作区变更，待独立终审与修复闭环
 - 未 push、未 merge、未安装、未导出、未发布
 - 当前相对本地 `origin/main` ahead 48、behind 0
 
@@ -41,6 +42,7 @@ PYTHONWARNINGS=error python3 -m unittest discover -s tests -v
 | `e385ab9` | 已提交 | 精确版本 Lark raw-content normalizer 与合成 fixture |
 | `b293cf7` | 已提交 | 修复 JSON escape 脱敏顺序、typed snapshot 组合与 raw-content broker 边界 |
 | `89edbe9` | 已完成并通过独立评审 | typed document 转换前资源预检与冗余收敛 |
+| `1996505` | 已提交 | Task 5 completion record |
 
 本次 completion-record 提交只记录计划与状态，不在文档中写入自引用 SHA。Task 1/2/3/4 的中间 review gate 和 Task 5 最终 review gate 均已完成。
 
@@ -73,10 +75,10 @@ PYTHONWARNINGS=error python3 -m unittest discover -s tests -v
 - 新增 [adapter compatibility](../../knowledge-distiller/references/adapter-compatibility.md) 与 [canonical adapter contract](../../knowledge-distiller/references/adapter-contract.md)。
 - 记录 2026-09-04 的官方资料和本地只读 CLI help 证据。
 - 明确区分“产品存在某项能力”和“存在稳定、可安全解析的 native schema”。
-- Lark 精确 raw-content tuple 为 `normalizer-supported`；Codex、Claude Code、Trae 仍为 `blocked`。
-- event graph 仍只允许 synthetic tuple；canonical document 另允许精确 Lark tuple。
+- Lark 精确 raw-content tuple 为 `normalizer-supported`；Codex 精确 rollout tuple 为 `supported`；Claude Code、Trae 仍为 `blocked`。
+- event graph 允许 synthetic 与精确 Codex tuple；canonical document 允许 synthetic 与精确 Lark tuple。
 - Lark 只允许显式 `--as user` 的 Docx raw-content GET，并要求 trusted receipt 给出一致的 revision-before/after。
-- Codex 仅确认 resume/fork 与运行时 JSON event 能力；未确认稳定的历史 transcript 导出 schema。
+- Codex `0.153.0` 的 version-pinned 官方源码、合成 observed-shape fixture 与授权聚合 closed-prefix replay 已固定 `rollout-jsonl-v1`；旧版本及包含无法证明因果或内容投影的完整文件 fail closed。
 - Claude Code 官方公开本地 JSONL 与 session API，但尚无满足本项目完整因果契约的版本化 fixture。
 - TraeCode 的带连字符可执行文件 `trae-cli` 已确认存在；其版本输出为 `traecli 0.202.3(internal edition)`。不带连字符的 `traecli` 是另一个 Coco 程序，不能作为 TraeCode 证据。
 
@@ -163,12 +165,18 @@ Task 5 实现严格 envelope decoder，先解析 `ok/identity/data.content`，�
 
 Task 5 独立规格终审为 `SPEC PASS`，独立质量终审为 `READY`，Critical、Important、Minor 均无遗留。质量评审明确复核了代码精简与冗余：删除单用途 record helper、不可达 span 检查、恒真/重复测试断言；新增 typed preflight 是必要且唯一的资源边界，没有剩余死代码、重复生产逻辑、重复测试或过度设计。实现与修复提交为 `e385ab9`、`b293cf7`、`89edbe9`。
 
+Task 6 已完成主进程实现：新增纯内存、无 I/O 的 Codex `0.153.0 / rollout-jsonl-v1` 严格 JSONL parser/normalizer，要求首条唯一 `session_meta`、从零连续 ordinal、完整换行闭合 prefix、外部 owner/snapshot trust anchors 与认证 redaction binding。仅 `user.text` 成为 owner claim；assistant message、tool call/result 与 compaction 被映射到既有 canonical event graph。cross-agent native 记录无法显式绑定 message、recipient 与实际消费动作，因此与 fork、rollback/edit/retry、nested-agent lifecycle、unknown/mixed schema、非文本 output、未配对工具一并整份隔离，不做 best-effort record skip。
+
+用户明确授权只读检查所有本地 Codex active/archived sessions 后，兼容性探针只输出聚合统计：初始快照为 83 个 JSONL、47,658 条合法 object record；35 个旧版本文件保持 blocked。最终 fail-closed 规则下，48 个 `0.153.0` 完整文件均因至少一个不支持的因果或内容投影而隔离；对精确、换行闭合前缀的 bounded probe 找到 1 个可支持的 root prefix（9 条 record，生成 1 个 canonical event）。因此 `supported` 精确指向可证明的闭合 prefix，而不是任意完整 session 文件。探针未输出或保留正文、路径、session ID；仓库 fixture 完全合成，只保存 bounded schema shape 和聚合元数据。这些数字是时点聚合观测，live session roots 可能变化。
+
+Task 6 独立规格终审为 `SPEC PASS`，质量终审在发现两项 Important 后完成修复复审并给出 `READY`：cross-agent native shape 无法显式绑定 message、recipient 与实际消费动作，现全部 fail closed，不再臆造 sent/delivered/consumed；task lifecycle 增加 pinned scalar、非负范围、完成时序、唯一 start 与 `started_at` binding。代码精简审查删除了 60 余行不可安全到达的 cross-agent event/loss/追踪逻辑，以及 `item_completed` 在必然隔离前的冗余 schema 解析。最终无 Critical/Important/Minor 遗留。
+
 ### 产品里程碑
 
-- Codex、Claude Code、Trae session adapters 的 content-authorized fixtures 与版本兼容性验证。
+- Claude Code、Trae session adapters 的 content-authorized fixtures 与版本兼容性验证。
 - DiscoveryGrant、MetadataGrant、ContentGrant、AuthorityAttestation 的持久化与 broker binding。
 - Lark production credential runner、完整 ingestion transaction 和本地 session descriptor broker 集成。
-- Codex native parser 与 dual-source ingestion persistence。
+- Lark/Codex dual-source ingestion persistence。
 - provenance/evidence/claim/capability knowledge model。
 - critical-question policy 与 skill compiler。
 - sealed evaluator、ApprovalSubject、VersionApproval。
@@ -180,7 +188,7 @@ Task 5 独立规格终审为 `SPEC PASS`，独立质量终审为 `READY`，Criti
 
 - 仅按明确授权读取过指定 Wiki 页面的当前 Docx metadata/raw content，用于内存兼容性验证；未读取评论、链接目标、嵌入、附件、子文档或历史版本。
 - 真实 Lark 正文未显示、未写入仓库、未保存在测试 fixture；仓库内只有合成内容与 bounded schema 元数据。
-- 尚未读取任何真实 Codex、Claude Code 或 Trae session 内容、索引或目录。
-- 除上述单一已授权 Lark probe 外，只使用官方资料、CLI `--help`/`--version` 和 synthetic fixtures。
+- 已按用户明确授权对本地 Codex active/archived session roots 做只读聚合兼容性 probe；没有输出或保留正文、路径、session ID，未读取 credentials/config/cache，也未修改原生文件。
+- 除上述单一已授权 Lark probe 与 Codex 聚合兼容性 probe 外，只使用官方资料、CLI `--help`/`--version` 和 synthetic fixtures。
 - 未执行 push、merge、skill 安装、导出、发布或外部写入。
 - 未进行更大范围的环境变更；观察到的 CLI 版本/skill notice 未触发升级或配置修改。

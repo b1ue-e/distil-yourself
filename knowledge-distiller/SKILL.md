@@ -9,7 +9,7 @@ description: Use when a user wants to distill their documents, agent sessions, d
 
 Turn explicitly authorized personal evidence into one small, behaviorally testable domain-skill draft. Preserve the owner's decision cues, priorities, constraints, exceptions, and recovery strategies instead of merely summarizing source material.
 
-This repository implements the deterministic foundation and local durable state checkpoints. The canonical adapter contract and synthetic conformance harness exist. One exact Lark raw-content normalizer tuple is available, but trusted ingestion and all Codex, Claude Code, and Trae native adapters remain blocked. Sealed evaluation, signatures, export, installation, and publication are also not implemented.
+This repository implements the deterministic foundation and local durable state checkpoints. The canonical adapter contract and synthetic conformance harness exist. One exact Lark raw-content normalizer tuple and one exact Codex rollout adapter tuple are available, but trusted dual-source ingestion and all Claude Code and Trae native adapters remain blocked. Sealed evaluation, signatures, export, installation, and publication are also not implemented.
 
 ## Route the request
 
@@ -57,7 +57,7 @@ python3 scripts/kd.py transition --state '{"phase":"init","epoch":0}' --event st
 
 `transition` is a stateless simulation command; use the `task-*` commands for real task progress. Treat a rejected transition, corrupt workspace, or rejected artifact as a blocking result. Do not weaken policy or edit the user's source to make validation pass.
 
-Successful event-graph validation proves only that the graph conforms to the listed synthetic tuple and canonical contract. It does not authorize a source read, does not authorize native tool invocation, and does not make any native event-graph adapter supported.
+Successful event-graph validation proves only that the graph conforms to an allowlisted exact tuple and the canonical contract. It does not authorize a source read, native tool invocation, directory enumeration, ingestion, or any future access. Native readiness is defined separately by the compatibility gate.
 
 A successful checkpoint does not grant source access and does not authorize external mutation. It records only typed workflow state and hashes of secret-free transition facts.
 
