@@ -183,7 +183,7 @@ The first native session target is Codex because it exercises the local CLI-sess
 
   Parse the pinned fixture family into `CanonicalDocument`; reject every other product/native-schema tuple. Do not infer authorship or claim eligibility from document availability alone.
 
-- [ ] **Step 5: Run the Lark conformance suite and update readiness precisely**
+- [x] **Step 5: Run the Lark conformance suite and update readiness precisely**
 
   Run: `python3 -m unittest tests.test_lark_adapter tests.test_brokers tests.test_sources -v`
 

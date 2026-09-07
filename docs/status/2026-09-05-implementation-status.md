@@ -1,25 +1,25 @@
 # Knowledge Distiller 实现状态
 
-更新时间：2026-09-06（Asia/Shanghai）
+更新时间：2026-09-07（Asia/Shanghai）
 
 ## 当前结论
 
-`knowledge-distiller` 已完成既有 adapter-contract 里程碑，以及 core dual-source loop 的 Task 1–4：授权/source contracts、私有原子 artifact store、只读 source broker 和 deterministic pre-ingestion redaction。当前下一项为 Task 5 的 version-pinned Lark document adapter。
+`knowledge-distiller` 已完成既有 adapter-contract 里程碑，以及 core dual-source loop 的 Task 1–5：授权/source contracts、私有原子 artifact store、只读 source broker、deterministic pre-ingestion redaction，以及 version-pinned Lark raw-content normalizer。当前下一项为 Task 6 的 Codex local-session adapter。
 
-主进程最新严格完整测试为 287/287 通过；Task 4 定向边界测试为 60/60 通过，`compileall` 与 `git diff --check` 通过。完整验证命令为：
+主进程最新严格完整测试为 299/299 通过；Task 5 Lark/broker/source conformance 为 45/45 通过，最终质量评审定向测试为 62/62 通过，`compileall` 与 `git diff --check` 通过。完整验证命令为：
 
 ```bash
 PYTHONWARNINGS=error python3 -m unittest discover -s tests -v
 ```
 
-四个原生来源适配器仍全部为 `blocked`，没有把任何产品或 native schema 宣称为已支持。
+精确 tuple `lark / 1.0.0 / 1.0.86 / docx-v1-raw-content-v1` 当前仅为 `normalizer-supported`；它不授权读取，也不代表 trusted ingestion 已完成。Codex、Claude Code、Trae session adapter 仍为 `blocked`。
 
 ## 分支与提交
 
 - 当前分支：`feat/implement_knowledge_distiller`
-- 最新实现提交：`af20c22 fix: normalize malformed armor separators`
+- 最新实现提交：`89edbe9 fix: bound typed document conversion`
 - 未 push、未 merge、未安装、未导出、未发布
-- 当前相对本地 `origin/main` ahead 43、behind 0
+- 当前相对本地 `origin/main` ahead 48、behind 0
 
 已完成的本地提交：
 
@@ -38,6 +38,9 @@ PYTHONWARNINGS=error python3 -m unittest discover -s tests -v
 | `42d8b92` | 已提交 | 将 conformance 示例改为 shell-safe 的合法 digest |
 | `6e450f5` | 已提交 | 拆分 compatibility 与 canonical normalization guidance 路由 |
 | `3f48383` | 已提交 | 拒绝 JSON lone surrogate 并补充回归覆盖 |
+| `e385ab9` | 已提交 | 精确版本 Lark raw-content normalizer 与合成 fixture |
+| `b293cf7` | 已提交 | 修复 JSON escape 脱敏顺序、typed snapshot 组合与 raw-content broker 边界 |
+| `89edbe9` | 已完成并通过独立评审 | typed document 转换前资源预检与冗余收敛 |
 
 本次 completion-record 提交只记录计划与状态，不在文档中写入自引用 SHA。Task 1/2/3/4 的中间 review gate 和 Task 5 最终 review gate 均已完成。
 
@@ -70,9 +73,9 @@ PYTHONWARNINGS=error python3 -m unittest discover -s tests -v
 - 新增 [adapter compatibility](../../knowledge-distiller/references/adapter-compatibility.md) 与 [canonical adapter contract](../../knowledge-distiller/references/adapter-contract.md)。
 - 记录 2026-09-04 的官方资料和本地只读 CLI help 证据。
 - 明确区分“产品存在某项能力”和“存在稳定、可安全解析的 native schema”。
-- Lark、Codex、Claude Code、Trae 四行 readiness 均严格为 `blocked`。
-- 唯一允许的版本元组为 synthetic fixture：`synthetic / 1.0.0 / synthetic-1 / synthetic-1`。
-- Lark 仅确认显式 `--as user|bot` 与 revision 参数；未确认稳定 principal-bound 输出 schema。
+- Lark 精确 raw-content tuple 为 `normalizer-supported`；Codex、Claude Code、Trae 仍为 `blocked`。
+- event graph 仍只允许 synthetic tuple；canonical document 另允许精确 Lark tuple。
+- Lark 只允许显式 `--as user` 的 Docx raw-content GET，并要求 trusted receipt 给出一致的 revision-before/after。
 - Codex 仅确认 resume/fork 与运行时 JSON event 能力；未确认稳定的历史 transcript 导出 schema。
 - Claude Code 官方公开本地 JSONL 与 session API，但尚无满足本项目完整因果契约的版本化 fixture。
 - TraeCode 的带连字符可执行文件 `trae-cli` 已确认存在；其版本输出为 `traecli 0.202.3(internal edition)`。不带连字符的 `traecli` 是另一个 Coco 程序，不能作为 TraeCode 证据。
@@ -117,8 +120,8 @@ python3 knowledge-distiller/scripts/kd.py validate-event-graph GRAPH.json \
 
 - `SKILL.md` 和 README 已加入 shell-safe 的 `validate-event-graph` 命令，以及 `--expected-owner-id`、`--expected-source-snapshot-id` 两个必需 trust anchors。
 - compatibility 与 canonical normalization 被路由到 `adapter-compatibility.md`、`adapter-contract.md` 和本地 validator。
-- 明确成功 validation 只证明 synthetic tuple/canonical contract conformance，不授权 source read 或 native tool invocation，也不让任何 native adapter 变为 supported。
-- Lark、Codex、Claude Code、Trae 仍全部为 blocked/unimplemented。
+- 明确成功 event-graph validation 只证明 synthetic tuple/canonical contract conformance，不授权 source read 或 native tool invocation，也不让任何 native event-graph adapter 变为 supported。
+- 该里程碑完成时 Lark、Codex、Claude Code、Trae 均为 blocked；Task 5 后仅精确 Lark document normalizer tuple 改为 `normalizer-supported`。
 - skill TDD 基线确认旧 guidance 无法给出精确命令；新契约测试先 RED 后 GREEN。
 - 首轮规格审查发现 angle-bracket digest placeholder 会触发 zsh 重定向；现已替换为合法 64 位小写十六进制 digest，并由 `shlex.split` 与正则测试保护。
 - 最终规格与质量双审均为 Ready，无 Critical、Important 或 Minor 遗留。
@@ -150,18 +153,22 @@ Task 3 已完成：将 `kd.py` 的显式路径、逐级 `O_NOFOLLOW`、regular/h
 
 Task 3 的 broker snapshot 区分 active reader 与独立 attested `content_owner`，不会把技术读取者误标为内容所有者；broker 不调用 document/event adapter parser，也未添加任何 production runner 或 native support tuple。主进程最新定向测试为 115/115，完整回归为 256/256，`compileall` 与 `git diff --check` 通过。独立规格复审为 `SPEC PASS`，质量复审为 `READY`，Critical、Important、Minor 均无遗留；安全文件读取重复代码已移除，broker 的授权、credential、receipt 与 source trust layers 被确认是必要的独立边界。实现与修复提交为 `722b8b4`、`7286cd6`、`54ef068`。
 
-Task 4 已完成：新增纯内存、无 I/O、资源有界且单次使用的 deterministic redactor。它在任何 native parser 或持久化之前处理 bounded source spans，覆盖私钥装甲、bearer/session token、cookie、credential assignment、邮箱、电话和显式 participant name/ID；placeholder 使用按类型分域的 HMAC-SHA256。每个结果都绑定外部 source binding、位置、owner context、run、grant/attestation 和 typed provenance chain，公开 validator 需要调用方提供完整 `expected_bindings`，可拒绝 reorder、duplicate、跨 source substitution 与篡改。只有 `actor_kind=user`、`actor_resolution=verified-owner` 且 actor ID 与 context owner 精确一致时才可作为 owner claim。
+Task 4 已完成：新增纯内存、无 I/O、资源有界且单次使用的 deterministic redactor。它在任何 semantic native normalization 或持久化之前处理 bounded source spans，覆盖私钥装甲、bearer/session token、cookie、credential assignment、邮箱、电话和显式 participant name/ID；placeholder 使用按类型分域的 HMAC-SHA256。每个结果都绑定外部 source binding、位置、owner context、run、grant/attestation 和 typed provenance chain，公开 validator 需要调用方提供完整 `expected_bindings`，可拒绝 reorder、duplicate、跨 source substitution 与篡改。只有 `actor_kind=user`、`actor_resolution=verified-owner` 且 actor ID 与 context owner 精确一致时才可作为 owner claim。
 
 私钥装甲识别经多轮对抗评审后收敛为单次 O(n) ASCII-token DFA：精确 allowlisted envelope 才脱敏成功，fenced malformed/token split/token interruption 均 fail closed。最终精简修复删除 `unicodedata`、interruption flags 和重复分支，净删除 28 行状态复杂度。独立规格复审为 `SPEC PASS`，独立质量复审为 `READY`，Critical、Important、Minor 均无遗留；质量 reviewer 的 192 组 separator-position 组合探针全部通过。Task 4 定向边界测试为 60/60，严格完整回归为 287/287，`compileall` 与 `git diff --check` 通过。主要实现与收口提交为 `039abf0`、`1aeff8f`、`9b9afcd`、`4040cc3`、`ba2a8b2`、`4e8afa4`、`e4b51bb`、`af20c22`。
 
-尚未读取真实来源，也尚未把任何 native adapter 从 `blocked` 改为 `supported`。用户已提供精确 Wiki selector，并将授权范围限制为该页面的当前版本。Task 4 安全前置现已完成；Task 5 下一步只解析该 exact resource 的当前 revision，先验证 active user principal 与 content owner/authority，再捕获最小化脱敏 fixture。不会遍历链接、嵌入、附件、子文档、评论或历史版本。
+Task 5 已完成：在用户明确授权的单一 Wiki 当前页面范围内，验证 active user principal 与 Wiki creator/owner 一致，并固定 Docx revision `3365`。只使用 metadata GET 与 raw-content GET；未调用可能携带评论的 `docs +fetch`，也未遍历链接、嵌入、附件、子文档、评论或历史版本。真实正文只进入一次内存兼容性管道，没有显示、写入仓库或进入 fixture；仓库 fixture 为完全合成内容，只保留 observed schema shape、CLI version 和 revision 元数据。
+
+Task 5 实现严格 envelope decoder，先解析 `ok/identity/data.content`，再只把 decoded content 交给 deterministic redactor，关闭 JSON `\u` escape 重建敏感内容的绕过。normalizer 仅接受认证后的 redaction result，绑定 owner、source snapshot、revision 与 digest-only native document locator，输出单一 unresolved/claim-ineligible block 和明确 formatting loss。typed `CanonicalDocument` 可直接进入 shared snapshot validator，并在任何 wire materialization 前执行与 wire payload 一致的 blocks/items 资源预检。
+
+Task 5 独立规格终审为 `SPEC PASS`，独立质量终审为 `READY`，Critical、Important、Minor 均无遗留。质量评审明确复核了代码精简与冗余：删除单用途 record helper、不可达 span 检查、恒真/重复测试断言；新增 typed preflight 是必要且唯一的资源边界，没有剩余死代码、重复生产逻辑、重复测试或过度设计。实现与修复提交为 `e385ab9`、`b293cf7`、`89edbe9`。
 
 ### 产品里程碑
 
-- 四个 native adapters 的 content-authorized redacted fixtures 与版本兼容性验证。
+- Codex、Claude Code、Trae session adapters 的 content-authorized fixtures 与版本兼容性验证。
 - DiscoveryGrant、MetadataGrant、ContentGrant、AuthorityAttestation 的持久化与 broker binding。
-- Lark trusted request broker 和本地 session descriptor broker。
-- 隔离 Lark/Codex native parser 与 ingestion persistence（deterministic redaction 已完成）。
+- Lark production credential runner、完整 ingestion transaction 和本地 session descriptor broker 集成。
+- Codex native parser 与 dual-source ingestion persistence。
 - provenance/evidence/claim/capability knowledge model。
 - critical-question policy 与 skill compiler。
 - sealed evaluator、ApprovalSubject、VersionApproval。
@@ -171,8 +178,9 @@ Task 4 已完成：新增纯内存、无 I/O、资源有界且单次使用的 de
 
 ## 安全与范围记录
 
-- 尚未读取任何真实 Lark 云文档。
+- 仅按明确授权读取过指定 Wiki 页面的当前 Docx metadata/raw content，用于内存兼容性验证；未读取评论、链接目标、嵌入、附件、子文档或历史版本。
+- 真实 Lark 正文未显示、未写入仓库、未保存在测试 fixture；仓库内只有合成内容与 bounded schema 元数据。
 - 尚未读取任何真实 Codex、Claude Code 或 Trae session 内容、索引或目录。
-- 研究阶段只使用官方公开资料、CLI `--help`/`--version` 和 synthetic fixtures。
+- 除上述单一已授权 Lark probe 外，只使用官方资料、CLI `--help`/`--version` 和 synthetic fixtures。
 - 未执行 push、merge、skill 安装、导出、发布或外部写入。
 - 未进行更大范围的环境变更；观察到的 CLI 版本/skill notice 未触发升级或配置修改。
