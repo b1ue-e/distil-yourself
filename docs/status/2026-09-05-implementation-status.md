@@ -17,10 +17,10 @@ PYTHONWARNINGS=error python3 -m unittest discover -s tests -v
 ## 分支与提交
 
 - 当前分支：`feat/implement_knowledge_distiller`
-- 最新完成记录提交：`1996505 docs: complete Lark adapter milestone`
-- Task 6 当前为未提交工作区变更，待独立终审与修复闭环
+- 最新实现提交：`fafbd98 feat: add pinned Codex session adapter`
+- Task 6 已提交、已完成独立终审与修复闭环
 - 未 push、未 merge、未安装、未导出、未发布
-- 当前相对本地 `origin/main` ahead 48、behind 0
+- 本 completion record 提交后相对本地 `origin/main` ahead 50、behind 0
 
 已完成的本地提交：
 
@@ -43,6 +43,7 @@ PYTHONWARNINGS=error python3 -m unittest discover -s tests -v
 | `b293cf7` | 已提交 | 修复 JSON escape 脱敏顺序、typed snapshot 组合与 raw-content broker 边界 |
 | `89edbe9` | 已完成并通过独立评审 | typed document 转换前资源预检与冗余收敛 |
 | `1996505` | 已提交 | Task 5 completion record |
+| `fafbd98` | 已完成并通过独立评审 | 精确版本 Codex rollout adapter、合成 fixture 与 fail-closed 因果边界 |
 
 本次 completion-record 提交只记录计划与状态，不在文档中写入自引用 SHA。Task 1/2/3/4 的中间 review gate 和 Task 5 最终 review gate 均已完成。
 
