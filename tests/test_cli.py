@@ -17,12 +17,124 @@ CLI = ROOT / "knowledge-distiller" / "scripts" / "kd.py"
 sys.path.insert(0, str(ROOT / "knowledge-distiller" / "scripts"))
 
 import kd as kd_cli  # noqa: E402
-from knowledge_distiller import adapters, ingestion  # noqa: E402
+from knowledge_distiller import artifacts, adapters, compiler, ingestion, knowledge  # noqa: E402
 from knowledge_distiller import source_io  # noqa: E402
 from knowledge_distiller.persistence import TaskCoordinator, create_task  # noqa: E402
 
 
 class CliTest(unittest.TestCase):
+    def knowledge_packet_bytes(self, *, questions=True):
+        from tests.test_knowledge import packet
+        value = packet()
+        if not questions:
+            value["questions"] = []
+        return json.dumps(value, separators=(",", ":")).encode("utf-8")
+
+    def test_validate_knowledge_packet_emits_scores_without_private_evidence(self) -> None:
+        raw = self.knowledge_packet_bytes()
+        with mock.patch.object(source_io, "read_source", return_value=raw) as reader:
+            payload = kd_cli._run(("validate-knowledge-packet", "packet.json"))
+
+        reader.assert_called_once_with(
+            "packet.json", max_bytes=knowledge.MAX_PACKET_BYTES)
+        self.assertEqual(payload["knowledge"]["schema_version"], knowledge.SCHEMA_VERSION)
+        self.assertEqual(payload["knowledge"]["selected_capability_id"], "cap-selected")
+        self.assertEqual(payload["knowledge"]["evidence_count"], 2)
+        self.assertEqual(payload["knowledge"]["scores"][0]["total"], 10)
+        self.assertNotIn("Synthetic redacted evidence", json.dumps(payload))
+
+    def test_next_critical_question_emits_at_most_one_bounded_question(self) -> None:
+        raw = self.knowledge_packet_bytes()
+        with mock.patch.object(source_io, "read_source", return_value=raw):
+            payload = kd_cli._run(("next-critical-question", "packet.json"))
+
+        self.assertEqual(payload["question"]["question_id"], "q-rules")
+        self.assertEqual(len(payload["question"]["alternatives"]), 2)
+        self.assertEqual(payload["pending_uncertainty_count"], 1)
+        self.assertNotIn("excerpt", json.dumps(payload))
+
+        raw = self.knowledge_packet_bytes(questions=False)
+        with mock.patch.object(source_io, "read_source", return_value=raw):
+            payload = kd_cli._run(("next-critical-question", "packet.json"))
+        self.assertIsNone(payload["question"])
+
+    def test_compile_capability_emits_manifest_not_draft_or_private_packet(self) -> None:
+        raw = self.knowledge_packet_bytes(questions=False)
+        result = compiler.CompilationResult(
+            status="compiled", phase="evaluate", generation_id="g-compiled",
+            manifest_digest="a" * 64,
+            manifest=(artifacts.ArtifactRecord(
+                "SKILL.md", "b" * 64, 10, "text/markdown"),),
+            draft_files={"SKILL.md": b"PRIVATE-DRAFT"},
+        )
+        with mock.patch.object(source_io, "read_source", return_value=raw) as reader, \
+                mock.patch.object(compiler, "compile_capability", return_value=result) as compile:
+            payload = kd_cli._run((
+                "compile-capability", "task", "packet.json",
+                "--transaction-id", "compile-1",
+                "--expected-generation-id", "g-prior",
+            ))
+
+        reader.assert_called_once_with(
+            "packet.json", max_bytes=knowledge.MAX_PACKET_BYTES)
+        compile.assert_called_once_with(
+            Path("task"), raw, "compile-1", "g-prior")
+        self.assertEqual(payload, {"ok": True, "compilation": {
+            "status": "compiled", "phase": "evaluate",
+            "generation_id": "g-compiled", "manifest_digest": "a" * 64,
+            "manifest": [{"path": "SKILL.md", "sha256": "b" * 64,
+                          "size": 10, "media_type": "text/markdown"}],
+        }})
+        self.assertNotIn("PRIVATE", json.dumps(payload))
+
+    def test_adjudicate_knowledge_packet_is_a_separate_persisted_boundary(self) -> None:
+        raw = self.knowledge_packet_bytes(questions=False)
+        result = SimpleNamespace(
+            state=SimpleNamespace(phase=SimpleNamespace(value="compile")),
+            generation_id="g-adjudicated", manifest_digest="c" * 64,
+        )
+        with mock.patch.object(source_io, "read_source", return_value=raw) as reader, \
+                mock.patch.object(
+                    compiler, "adjudicate_knowledge_packet",
+                    return_value=result) as adjudicate:
+            payload = kd_cli._run((
+                "adjudicate-knowledge-packet", "task", "packet.json",
+                "--transaction-id", "decision-1",
+                "--expected-generation-id", "g-review",
+            ))
+
+        reader.assert_called_once_with(
+            "packet.json", max_bytes=knowledge.MAX_PACKET_BYTES)
+        adjudicate.assert_called_once_with(
+            Path("task"), raw, "decision-1", "g-review")
+        self.assertEqual(payload, {"ok": True, "adjudication": {
+            "status": "adjudicated", "phase": "compile",
+            "generation_id": "g-adjudicated", "manifest_digest": "c" * 64,
+        }})
+
+    def test_knowledge_and_compiler_rejections_are_bounded(self) -> None:
+        with mock.patch.object(
+                source_io, "read_source", return_value=b'{"PRIVATE":1}'), \
+                mock.patch.object(kd_cli.sys, "stderr", io.StringIO()) as stderr:
+            code = kd_cli.main(("validate-knowledge-packet", "PRIVATE.json"))
+        self.assertEqual(code, 3)
+        self.assertEqual(json.loads(stderr.getvalue())["error"], {
+            "code": "knowledge-packet-rejected", "reason": "unknown-field"})
+        self.assertNotIn("PRIVATE", stderr.getvalue())
+
+        with mock.patch.object(source_io, "read_source", return_value=b"{}"), \
+                mock.patch.object(
+                    compiler, "compile_capability",
+                    side_effect=compiler.CompilerError("compilation-invalid")), \
+                mock.patch.object(kd_cli.sys, "stderr", io.StringIO()) as stderr:
+            code = kd_cli.main((
+                "compile-capability", "task", "packet.json",
+                "--transaction-id", "tx", "--expected-generation-id", "g-1"))
+        self.assertEqual(code, 3)
+        self.assertEqual(json.loads(stderr.getvalue())["error"], {
+            "code": "capability-compilation-rejected",
+            "reason": "compilation-invalid"})
+
     def test_ingest_source_requires_trusted_runtime_before_request_read(self) -> None:
         with mock.patch.object(source_io, "read_source") as reader, mock.patch.object(
                 kd_cli.sys, "stderr", io.StringIO()) as stderr:

@@ -323,8 +323,10 @@ def transition(state: TaskState, event: Event, facts: TransitionFacts) -> TaskSt
     if event is Event.EVIDENCE_EXTRACTED:
         _at(state, Phase.EXTRACT, event)
         _require(facts, "evidence_complete")
-        phase = Phase.CLAIM_REVIEW if facts.high_impact_conflict else Phase.COMPILE
-        return replace(state, phase=phase)
+        # Every proposed packet crosses the explicit current-user adjudication
+        # boundary before it can be compiled, even when extraction found no
+        # unresolved conflict.
+        return replace(state, phase=Phase.CLAIM_REVIEW)
     if event is Event.CLAIMS_ADJUDICATED:
         _at(state, Phase.CLAIM_REVIEW, event)
         _require(facts, "claims_resolved")

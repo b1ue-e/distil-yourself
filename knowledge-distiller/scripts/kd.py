@@ -17,7 +17,7 @@ from knowledge_distiller.adapters import (
     validate_validation_context,
 )
 from knowledge_distiller.artifacts import DraftValidationError, validate_draft
-from knowledge_distiller import ingestion, source_io
+from knowledge_distiller import compiler, ingestion, knowledge, source_io
 from knowledge_distiller.persistence import (
     TaskBusyError,
     TaskPersistenceError,
@@ -145,6 +145,18 @@ def _read_ingestion_request(path: str) -> bytes:
         raise CliInputError(error.code) from None
 
 
+def _read_knowledge_packet(path: str) -> bytes:
+    try:
+        return source_io.read_source(path, max_bytes=knowledge.MAX_PACKET_BYTES)
+    except source_io.SourceIOError as error:
+        raise CliInputError(error.code) from None
+
+
+def _validated_knowledge_packet(path: str) -> knowledge.KnowledgePacket:
+    raw = _read_knowledge_packet(path)
+    return knowledge.validate_packet(knowledge.decode_packet(raw))
+
+
 def _validate_event_graph(
     path: str,
     expected_owner_id: str,
@@ -190,6 +202,24 @@ def _build_parser() -> JsonArgumentParser:
     ingest.add_argument("task_path")
     ingest.add_argument("request_path")
 
+    validate_knowledge = commands.add_parser("validate-knowledge-packet")
+    validate_knowledge.add_argument("packet_path")
+
+    next_question = commands.add_parser("next-critical-question")
+    next_question.add_argument("packet_path")
+
+    adjudicate = commands.add_parser("adjudicate-knowledge-packet")
+    adjudicate.add_argument("task_path")
+    adjudicate.add_argument("packet_path")
+    adjudicate.add_argument("--transaction-id", required=True)
+    adjudicate.add_argument("--expected-generation-id", required=True)
+
+    compile_capability = commands.add_parser("compile-capability")
+    compile_capability.add_argument("task_path")
+    compile_capability.add_argument("packet_path")
+    compile_capability.add_argument("--transaction-id", required=True)
+    compile_capability.add_argument("--expected-generation-id", required=True)
+
     state_transition = commands.add_parser("transition")
     state_transition.add_argument("--state", required=True)
     state_transition.add_argument("--event", required=True)
@@ -232,6 +262,55 @@ def _run(arguments: Sequence[str], *, ingestion_runtime=None) -> Dict[str, Any]:
         result = ingestion.ingest_request_bytes(
             Path(options.task_path), raw, runtime=ingestion_runtime)
         return {"ok": True, "ingestion": asdict(result)}
+
+    if options.command == "validate-knowledge-packet":
+        packet = _validated_knowledge_packet(options.packet_path)
+        return {"ok": True, "knowledge": {
+            "schema_version": packet.schema_version,
+            "evidence_count": len(packet.evidence),
+            "claim_count": len(packet.claims),
+            "candidate_count": len(packet.candidates),
+            "selected_capability_id": packet.model.selected_capability_id,
+            "critical_question_count": len(packet.questions),
+            "uncertainty_count": len(packet.uncertainties),
+            "scores": [asdict(score) for score in packet.scores],
+        }}
+
+    if options.command == "next-critical-question":
+        packet = _validated_knowledge_packet(options.packet_path)
+        question = knowledge.next_critical_question(packet)
+        return {
+            "ok": True,
+            "question": None if question is None else asdict(question),
+            "pending_uncertainty_count": len(packet.uncertainties),
+        }
+
+    if options.command == "adjudicate-knowledge-packet":
+        raw = _read_knowledge_packet(options.packet_path)
+        result = compiler.adjudicate_knowledge_packet(
+            Path(options.task_path), raw, options.transaction_id,
+            options.expected_generation_id,
+        )
+        return {"ok": True, "adjudication": {
+            "status": "adjudicated",
+            "phase": result.state.phase.value,
+            "generation_id": result.generation_id,
+            "manifest_digest": result.manifest_digest,
+        }}
+
+    if options.command == "compile-capability":
+        raw = _read_knowledge_packet(options.packet_path)
+        result = compiler.compile_capability(
+            Path(options.task_path), raw, options.transaction_id,
+            options.expected_generation_id,
+        )
+        return {"ok": True, "compilation": {
+            "status": result.status,
+            "phase": result.phase,
+            "generation_id": result.generation_id,
+            "manifest_digest": result.manifest_digest,
+            "manifest": [asdict(record) for record in result.manifest],
+        }}
 
     if options.command == "task-init":
         return {"ok": True, "task": _snapshot_payload(create_task(Path(options.path)))}
@@ -288,6 +367,20 @@ def main(arguments: Optional[Sequence[str]] = None, *, ingestion_runtime=None) -
         _emit(
             {"ok": False, "error": {
                 "code": "source-ingestion-rejected", "reason": error.code}},
+            sys.stderr,
+        )
+        return 3
+    except knowledge.KnowledgeError as error:
+        _emit(
+            {"ok": False, "error": {
+                "code": "knowledge-packet-rejected", "reason": error.code}},
+            sys.stderr,
+        )
+        return 3
+    except compiler.CompilerError as error:
+        _emit(
+            {"ok": False, "error": {
+                "code": "capability-compilation-rejected", "reason": error.code}},
             sys.stderr,
         )
         return 3
