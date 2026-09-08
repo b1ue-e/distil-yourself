@@ -7,40 +7,42 @@ description: Use when a user wants to distill their documents, agent sessions, d
 
 ## Overview
 
-Turn explicitly authorized personal evidence into one small, behaviorally testable domain-skill draft. Preserve the owner's decision cues, priorities, constraints, exceptions, and recovery strategies instead of merely summarizing source material.
+Turn authorized personal evidence into one small, testable skill draft that preserves decision cues, constraints, exceptions, and recovery strategies.
 
-This repository implements the deterministic foundation and local durable state checkpoints. The canonical adapter contract and synthetic conformance harness exist. One exact Lark raw-content normalizer tuple and one exact Codex rollout adapter tuple are available, but trusted dual-source ingestion and all Claude Code and Trae native adapters remain blocked. Sealed evaluation, signatures, export, installation, and publication are also not implemented.
+This implements checkpoints, authorization validation, dependency-injected dual-source ingestion, strict packets, one-question selection, adjudication, and a private-draft compiler. The canonical adapter contract and synthetic conformance harness exist. One exact Lark raw-content normalizer tuple and one exact Codex rollout adapter tuple are available.
+
+Automatic discovery, the production Lark runtime, production Codex runtime, Claude Code adapter, Trae adapter, sealed evaluation, approval signatures, export, installation, publication, and purge are unavailable. Never simulate one of these boundaries.
 
 ## Route the request
 
-Choose one operation. A task has exactly one durable mode:
+A task has exactly one durable mode:
 
 - `discover`: map candidate capabilities from a theme or seed.
 - `distill`: build one named repeatable capability.
 - `update`: revise a previously approved capability from new evidence.
 
-`resume` is an operation on a suspended task. It validates saved state and continues the recorded `discover`, `distill`, or `update` mode; it is not a fourth mode.
+`resume` validates a suspended task and continues its recorded mode; it is not a fourth mode.
 
-Do not trigger for ordinary summarization, generic knowledge questions, or skill authoring that does not involve the user's own evidence and judgment.
+Do not trigger for ordinary summaries, generic questions, or skill authoring without the user's own evidence and judgment.
 
-Read [references/workflow.md](references/workflow.md) before changing task phase. Read [references/authorization.md](references/authorization.md) before resolving or reading any source. Read [references/artifact-policy.md](references/artifact-policy.md) before compiling or validating a domain draft.
+Read [references/workflow.md](references/workflow.md) before changing task phase. Read [references/authorization.md](references/authorization.md) before resolving or reading a source, [references/knowledge-packet.md](references/knowledge-packet.md) before creating claims or questions, and [references/artifact-policy.md](references/artifact-policy.md) before compiling a draft.
 
 For adapter compatibility questions, including readiness questions, read only [references/adapter-compatibility.md](references/adapter-compatibility.md).
 
 When a user provides a specific candidate canonical graph for normalization or validation, proceed only if the owner ID and source snapshot ID are externally established. Then read [references/adapter-contract.md](references/adapter-contract.md) and run `validate-event-graph` below.
 
-## Foundation workflow
+## Core workflow
 
-1. State the selected mode, exact seed or capability, and current milestone limits. Select an explicit owner-only task workspace with the user, then create it with `task-init`.
-2. Before continuing an existing task, use `task-inspect`. If it reports a stale pointer or recoverable tail, use `task-inspect --recover`; stop on any corruption result.
-3. Resolve only metadata covered by explicit discovery and metadata grants.
-4. Propose exact content selectors and explain why each matters.
-5. Do not read source content until the matching content and authority records are active.
-6. Build a capability model from authorized evidence, distinguishing observations, owner statements, and inference.
-7. Ask only questions whose answers change behavior, unblock a critical branch, establish authority, or authorize an external mutation. Ask one at a time.
-8. Advance legal phases with `task-transition`. Do not place source content, excerpts, secrets, selectors, or free-form notes in transition facts.
-9. Compile only confirmed guidance. Keep private evidence outside the domain draft, then validate it with the bundled deterministic validator.
-10. Stop and report the next unavailable boundary. Never simulate an unimplemented adapter, evaluation, signature, export, or purge operation.
+1. State the mode, seed or capability, and limits. With the user, select an owner-only workspace and run `task-init`.
+2. Resume with `task-inspect`; use `--recover` only for its reported recoverable cases, and stop on corruption.
+3. Automatic discovery is unavailable. Use only metadata and selectors the user explicitly grants or approves.
+4. Each private request covers one selector and pinned revision or closed session range, with active ContentGrant and AuthorityAttestation before every source read.
+5. A trusted host must inject the exact Lark or Codex runtime. Ingest each separately; after both, follow the mode route in [references/workflow.md](references/workflow.md). Never print request content or redacted evidence.
+6. Build the strict packet defined in [references/knowledge-packet.md](references/knowledge-packet.md). Preserve `source snapshot → native evidence → redacted span → ContentGrant → AuthorityAttestation` for every claim.
+7. Ask at most one critical question at a time. A lower-impact uncertainty does not block progress. Before adjudication, the current user must explicitly confirm the selected capability and every claim that will be published. Do not generate or infer user confirmation.
+8. Compile only the exact adjudicated packet bytes and confirmed publishable guidance. The compiler validates and privately persists only `SKILL.md`, `references/capability.md`, and their manifest; it does not install or export.
+9. Use `task-transition` for other phases; keep content, secrets, selectors, and free-form text out of facts.
+10. Stop at the next unavailable boundary; never simulate adapters, evaluation, signatures, export, or purge.
 
 ## Deterministic commands
 
@@ -52,10 +54,11 @@ python3 scripts/kd.py validate-event-graph /absolute/path/to/graph.json --expect
 python3 scripts/kd.py task-init /absolute/path/to/task-workspace
 python3 scripts/kd.py task-inspect /absolute/path/to/task-workspace
 python3 scripts/kd.py task-transition /absolute/path/to/task-workspace --event start-discover --facts '{"has_seed":true}'
-python3 scripts/kd.py transition --state '{"phase":"init","epoch":0}' --event start-discover --facts '{"has_seed":true}'
 ```
 
-`transition` is a stateless simulation command; use the `task-*` commands for real task progress. Treat a rejected transition, corrupt workspace, or rejected artifact as a blocking result. Do not weaken policy or edit the user's source to make validation pass.
+Treat a rejected transition, corrupt workspace, or artifact as blocking. Do not weaken policy or edit a source to make validation pass.
+
+For the exact evidence-to-draft command sequence, read [references/workflow.md](references/workflow.md). Source ingestion is currently an embedded API boundary: its shell examples are syntax only. Standalone `kd.py ingest-source` returns `ingestion-runtime-unavailable` before reading the request file because no production runtime can be injected from the shell.
 
 Successful event-graph validation proves only that the graph conforms to an allowlisted exact tuple and the canonical contract. It does not authorize a source read, native tool invocation, directory enumeration, ingestion, or any future access. Native readiness is defined separately by the compatibility gate.
 
@@ -69,7 +72,9 @@ A successful checkpoint does not grant source access and does not authorize exte
 - Do not install, overwrite, publish, or share a generated skill.
 - Do not put scripts, executable content, archives, active documents, symlinks, or source binaries into a domain draft.
 - Do not place source content in checkpoint facts, paths, diagnostics, or task-control records.
+- Bounded evidence review is unavailable; an explicit request does not create a supported evidence-output path.
 - Do not claim distributed leases, sealed evaluation, signed approval, safe export, or deletion guarantees in this milestone.
+- Treat the compiled bundle as a private draft. Successful compilation does not install or export it.
 
 ## Progress report
 
@@ -79,6 +84,6 @@ Keep user-visible progress compact:
 Mode and phase
 Completed evidence-backed work
 Single blocking approval or decision, if any
-Recommended answer and evidence, only when justified
+Recommended answer and evidence basis/IDs, never private excerpts
 Next supported action or unimplemented boundary
 ```

@@ -267,7 +267,6 @@ def _adjudication_bytes(packet: knowledge.KnowledgePacket, raw_packet: bytes):
         SELECTED_CAPABILITY_PATH: canonical_json({
             "schema_version": "knowledge-distiller.capability-selection/v1",
             "selected_capability_id": packet.model.selected_capability_id,
-            "decided_by": "current-user",
         }),
         DECISIONS_PATH: canonical_json([asdict(item) for item in packet.decisions]),
     }

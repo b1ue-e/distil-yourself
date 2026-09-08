@@ -2,7 +2,7 @@
 
 Distil Yourself is a privacy-conscious, resumable Skill Factory for turning a person's documents, agent sessions, and explicit judgments into small, behaviorally testable agent skills.
 
-The approved design now has a runnable local foundation: a guarded workflow state model, crash-consistent state checkpoints, a closed-policy domain-draft validator, a JSON CLI, and contract/evaluation fixtures for the meta-skill.
+The approved design now has a runnable local core: guarded workflow checkpoints, authorization validation, dependency-injected Lark and Codex ingestion, a strict evidence/claim model, deterministic capability scoring, one-question selection, explicit adjudication, and a non-installing domain-skill compiler.
 
 ## Design
 
@@ -17,11 +17,11 @@ The proposed workflow:
 5. validate it with historical, boundary, trigger, and safety evaluations;
 6. require explicit approval before export or lifecycle updates.
 
-The [adapter compatibility matrix](knowledge-distiller/references/adapter-compatibility.md) and [canonical adapter contract](knowledge-distiller/references/adapter-contract.md) define the current boundary: the canonical adapter contract and synthetic conformance harness exist. One exact Lark raw-content normalizer tuple and one exact Codex rollout adapter tuple are available, while trusted dual-source ingestion and the Claude Code and Trae native adapters remain blocked.
+The [adapter compatibility matrix](knowledge-distiller/references/adapter-compatibility.md) and [canonical adapter contract](knowledge-distiller/references/adapter-contract.md) define the current boundary: the canonical adapter contract and synthetic conformance harness exist. One exact Lark raw-content normalizer tuple and one exact Codex rollout adapter tuple are available. Trusted, dependency-injected dual-source ingestion exists, but default production source runtimes do not.
 
 ## V1 boundaries
 
-V1 does not silently scan accessible data, generate or execute domain scripts, install skills, publish artifacts, or treat account access as permission to ingest content. Private evidence, sealed evaluations, and exportable skill artifacts remain separated.
+V1 does not silently scan accessible data, generate or execute domain scripts, install skills, publish artifacts, or treat account access as permission to ingest content. Private evidence, sealed evaluations, and exportable skill artifacts remain separated. Automatic discovery, the production Lark runtime, production Codex runtime, Claude Code adapter, Trae adapter, sealed evaluation, approval signatures, export, installation, publication, and purge are unavailable.
 
 ## Foundation usage
 
@@ -37,7 +37,7 @@ Validate a generated domain-skill draft:
 python3 knowledge-distiller/scripts/kd.py validate-draft /absolute/path/to/domain-skill
 ```
 
-The Foundation CLI has no caller-controlled asset allowlist, so it rejects every asset. A future compiler may call the library validator with its own reviewed, compiler-controlled template digests.
+The current compiler emits a fixed two-file bundle and calls the validator with an empty asset allowlist, so it rejects every asset. The CLI has no caller-controlled asset allowlist.
 
 Validate a candidate canonical event graph against the listed synthetic adapter tuple and explicit trust anchors:
 
@@ -77,13 +77,30 @@ Task directories and regular files use `0700` and `0600` modes. The framed journ
 
 Checkpoint facts are a closed set of booleans and one phase enum. Never place source text, secrets, locators, or free-form notes in them. Persisting a state transition grants no source access and authorizes no external mutation.
 
+The following lines document the embedded API boundary syntax only. They are not directly executable for real ingestion without a production host runtime:
+
+```bash
+python3 knowledge-distiller/scripts/kd.py ingest-source /absolute/path/to/task-workspace /absolute/path/to/lark-request.json
+python3 knowledge-distiller/scripts/kd.py ingest-source /absolute/path/to/task-workspace /absolute/path/to/codex-request.json
+python3 knowledge-distiller/scripts/kd.py validate-knowledge-packet /absolute/path/to/knowledge-packet.json
+python3 knowledge-distiller/scripts/kd.py next-critical-question /absolute/path/to/knowledge-packet.json
+python3 knowledge-distiller/scripts/kd.py adjudicate-knowledge-packet /absolute/path/to/task-workspace /absolute/path/to/knowledge-packet.json --transaction-id DECISION_ID --expected-generation-id GENERATION_ID
+python3 knowledge-distiller/scripts/kd.py compile-capability /absolute/path/to/task-workspace /absolute/path/to/knowledge-packet.json --transaction-id COMPILE_ID --expected-generation-id GENERATION_ID
+```
+
+Each ingestion request is private and covers one source selector and pinned revision or closed session range. Both ContentGrant and AuthorityAttestation are validated before every source read. Standalone `kd.py ingest-source` returns `ingestion-runtime-unavailable` before reading the request file. Claims retain the chain `source snapshot → native evidence → redacted span → ContentGrant → AuthorityAttestation`. Ask at most one critical question at a time; a lower-impact uncertainty does not block progress.
+
+Before adjudication, the current user must explicitly confirm the selected capability and every claim that will be published. The CLI validates the `current-user` marker structurally; it does not authenticate the current user. Do not generate or infer user confirmation. Compilation accepts only the exact adjudicated packet bytes, validates and stores a private draft plus manifest, and does not install or export.
+
+Compilation revalidates persisted provenance and recorded grant digest/time bounds; live revocation and issuer authentication remain broker responsibilities. Bounded evidence review is unavailable; an explicit request does not create a supported evidence-output path.
+
 ## Foundation limits
 
-This milestone does not implement the trusted request broker, parser sandbox, renewable/distributed leases, sealed evaluator, signed approval subjects, export/purge brokers, installation, or publication. Passing local validation or writing a checkpoint authorizes none of those operations.
+This milestone does not implement automatic discovery, a production Lark runtime, a production Codex runtime, the Claude Code adapter, the Trae adapter, a parser sandbox, renewable/distributed leases, sealed evaluation, approval signatures, export/purge brokers, installation, or publication. Passing local validation or writing a checkpoint authorizes none of those operations.
 
 ## Repository status
 
 - Design: approved
-- Implementation: deterministic Foundation plus durable local checkpoints
+- Implementation: deterministic dual-source evidence-to-private-draft core
 - CI and release process: not defined
 - License: not yet selected

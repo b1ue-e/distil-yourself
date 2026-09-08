@@ -2,6 +2,8 @@
 
 Technical access is not consent to process content. Bind every authorization to the active principal, tenant or account, exact selector, purpose, revision or range, issue time, expiry, task, and revocation state.
 
+Each ingestion request covers one source selector and pinned revision or closed session range. Validate both ContentGrant and AuthorityAttestation before every source read, including a second read in the same task. A successful earlier checkpoint, prior conversation, readable local path, or authenticated Lark session never substitutes for either record.
+
 ## Typed records
 
 | Record | Permits |

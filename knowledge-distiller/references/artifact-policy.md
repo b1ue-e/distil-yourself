@@ -8,7 +8,7 @@ The domain draft is a non-executable bundle with a closed allowlist.
 - One-level regular UTF-8 files under `references/` with `.md`, `.txt`, `.json`, `.yaml`, or `.yml` extensions.
 - Regular `.png`, `.jpg`, `.jpeg`, or `.webp` assets whose magic bytes match the extension and whose digest belongs to the compiler's reviewed template allowlist.
 
-The Foundation CLI has no reviewed template assets and therefore rejects all assets. Its library accepts a compiler-owned digest set so later compiler code can inject a shipped allowlist without taking trust from CLI input.
+The current compiler emits a fixed two-file bundle: `SKILL.md` and `references/capability.md`. It invokes the validator with an empty asset allowlist, so all assets are rejected. The validator library retains a compiler-owned digest parameter for a separately reviewed future milestone; callers cannot supply it through the CLI.
 
 ## Rejected
 

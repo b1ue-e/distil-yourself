@@ -186,6 +186,13 @@ class CapabilityCompilerTest(unittest.TestCase):
         self.assertEqual(manifest, [asdict(record) for record in result.manifest])
         self.assertEqual(
             (generation / "model/adjudicated-knowledge-packet.json").read_bytes(), raw)
+        selection = json.loads(
+            (generation / "model/selected-capability.json").read_text(
+                encoding="utf-8"))
+        self.assertEqual(selection, {
+            "schema_version": "knowledge-distiller.capability-selection/v1",
+            "selected_capability_id": "cap-selected",
+        })
         self.assertEqual(inspect_task(self.root).state.phase, Phase.EVALUATE)
         reference = result.draft_files["references/capability.md"].decode("utf-8")
         for section in SECTIONS:

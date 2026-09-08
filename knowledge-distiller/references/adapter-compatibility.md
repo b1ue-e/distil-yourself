@@ -5,7 +5,8 @@ Retrieved: 2026-09-07
 This matrix separates evidence that a product can expose history from evidence that
 Knowledge Distiller has a stable, versioned parse contract. Product capability is
 not adapter compatibility. One narrow Lark raw-content normalizer and one Codex
-rollout adapter are supported; the dual-source ingestion transaction remains Task 7.
+rollout adapter are supported; dependency-injected ingestion can atomically retain
+both sources in one task, while production source runtimes remain unavailable.
 Supported native versions: Lark / 1.0.0 / 1.0.86 / docx-v1-raw-content-v1 (normalizer only); Codex / 1.0.0 / 0.153.0 / rollout-jsonl-v1.
 All other native tuples remain disabled until an exact version passes the required
 conformance fixtures.
@@ -29,17 +30,17 @@ point-in-time aggregate observations; live session roots may change.
 
 | Adapter | Readiness | Locally observed client | Product capability evidence | Stable parse-contract evidence |
 | --- | --- | --- | --- | --- |
-| Lark | `normalizer-supported` | `lark-cli 1.0.86` | Official Docx GET APIs expose current revision and raw text without fetching comment content. | Exact CLI envelope `ok/identity/data.content`, revision sandwich, synthetic fixture, and redaction/normalization tests pass for `docx-v1-raw-content-v1`; trusted ingestion remains blocked. |
+| Lark | `normalizer-supported` | `lark-cli 1.0.86` | Official Docx GET APIs expose current revision and raw text without fetching comment content. | Exact CLI envelope `ok/identity/data.content`, revision sandwich, synthetic fixture, and redaction/normalization tests pass for `docx-v1-raw-content-v1`; the production credential runtime remains blocked. |
 | Codex | `supported` | `codex-cli 0.153.0` | Official source defines persisted rollout lines and session roots; the CLI can resume/fork sessions. | Exact local closed-prefix broker, `rollout-jsonl-v1` synthetic fixture, redaction/normalization tests, and one authorized aggregate closed-prefix replay pass; complete files containing unsupported projections fail closed. |
 | Claude Code | `blocked` | Executable unavailable through the local shim. | Official docs describe local JSONL transcripts and SDK session/message reads. | Public docs do not freeze every native JSONL record needed for the canonical causality contract. |
 | Trae | `blocked` | `traecli 0.202.3(internal edition)` | TraeCode CLI help exposes resume by UUID/thread name and fork by UUID. | Neither command establishes a read/export schema; Trae Agent trajectory JSON is a different product boundary. |
 
 `normalizer-supported` means only that already-authorized, already-redacted bytes
 for the exact tuple may enter the pure normalizer. It does not authorize a read,
-provide a production credential runner, persist evidence, or enable ingestion.
+provide a production credential runner, or make the standalone CLI a source reader.
 `supported` means the exact tuple has a read-only broker and pure normalizer that
-pass conformance; it does not enable the Task 7 ingestion CLI, install a skill,
-or authorize any future read.
+pass conformance and may enter dependency-injected ingestion. It does not provide
+a production runtime, install a skill, or authorize any future read.
 `blocked` means no product/native schema tuple may be accepted by that adapter.
 
 ## Lark
@@ -59,8 +60,8 @@ or authorize any future read.
 - **Missing guarantee:** the raw-content endpoint exposes no native block graph or
   per-block author. The v1 normalizer therefore emits one synthetic block,
   records non-semantic formatting loss, and marks it unresolved and
-  claim-ineligible. A production authorization/credential runner and private
-  ingestion transaction remain Task 7 work.
+  claim-ineligible. The private ingestion transaction exists, but a production
+  authorization/credential runner remains unavailable.
 - **Fixtures required to unblock:** the exact normalizer tuple is covered by a
   fully synthetic observed-shape fixture and expected canonical output. Rich
   block schemas, other CLI versions/envelopes, comments, history, and every

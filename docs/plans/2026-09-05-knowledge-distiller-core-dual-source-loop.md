@@ -295,19 +295,21 @@ The first native session target is Codex because it exercises the local CLI-sess
 - Modify: `README.md`
 - Modify: `tests/test_skill_contract.py`
 
-- [ ] **Step 1: Extend contract tests first**
+- [x] **Step 1: Extend contract tests first**
 
   Require the exact dual-source commands and approval boundaries, one-question policy, provenance requirements, and explicit statements that discovery, Claude Code, Trae, sealed evaluation, approval signatures, export, installation, and publication remain unavailable.
 
-- [ ] **Step 2: Update progressive-disclosure guidance**
+- [x] **Step 2: Update progressive-disclosure guidance**
 
-  Route source authorization, ingestion, knowledge packets, question adjudication, and compilation to their narrow references/commands. Keep user-facing progress compact and never print redacted evidence unless the user explicitly asks to review a bounded span.
+  Route source authorization, ingestion, knowledge packets, question adjudication, and compilation to their narrow references/commands. Keep user-facing progress compact. Because no bounded evidence-review command exists in this milestone, never print redacted evidence; even explicit user interest does not create a supported output path.
 
-- [ ] **Step 3: Run skill-contract tests green**
+- [x] **Step 3: Run skill-contract tests green**
 
   Run: `python3 -m unittest tests.test_skill_contract -v`
 
   Expected: PASS.
+
+  Result: 25/25. The independent guidance review returned `READY` with no Critical, Important, Minor, or simplification findings after correcting mode-specific routing, embedded-runtime wording, user-confirmation semantics, authority-question handling, persisted-vs-live grant claims, stale compatibility text, and the missing knowledge-packet contract.
 
 ### Task 10: Verify, simplify, independently review, and record completion
 

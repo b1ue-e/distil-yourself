@@ -1,6 +1,7 @@
 import json
 import re
 import shlex
+import sys
 import unittest
 from pathlib import Path
 
@@ -12,6 +13,13 @@ SKILL_FILE = SKILL_DIR / "SKILL.md"
 EVAL_FILE = SKILL_DIR / "evals" / "evals.json"
 ADAPTER_COMPATIBILITY_FILE = SKILL_DIR / "references" / "adapter-compatibility.md"
 ADAPTER_CONTRACT_FILE = SKILL_DIR / "references" / "adapter-contract.md"
+WORKFLOW_FILE = SKILL_DIR / "references" / "workflow.md"
+AUTHORIZATION_FILE = SKILL_DIR / "references" / "authorization.md"
+ARTIFACT_POLICY_FILE = SKILL_DIR / "references" / "artifact-policy.md"
+KNOWLEDGE_PACKET_FILE = SKILL_DIR / "references" / "knowledge-packet.md"
+sys.path.insert(0, str(SKILL_DIR / "scripts"))
+
+from knowledge_distiller import knowledge  # noqa: E402
 
 
 class SkillContractTest(unittest.TestCase):
@@ -67,9 +75,11 @@ class SkillContractTest(unittest.TestCase):
             "artifact-policy.md",
             "adapter-compatibility.md",
             "adapter-contract.md",
+            "knowledge-packet.md",
         ):
             self.assertIn(f"references/{reference}", text)
             self.assertTrue((SKILL_DIR / "references" / reference).is_file())
+        self.assertLess(len(text.split()), 900)
 
     def test_adapter_references_define_narrow_lark_and_codex_gates(self) -> None:
         self.assertTrue(
@@ -113,6 +123,9 @@ class SkillContractTest(unittest.TestCase):
             "one narrow lark raw-content normalizer and one codex rollout adapter are supported",
             " ".join(lower.split()),
         )
+        self.assertIn("dependency-injected ingestion", lower)
+        self.assertNotIn("remain task 7", lower)
+        self.assertNotIn("remains task 7", lower)
         self.assertEqual(
             re.findall(r"(?mi)^supported native versions:\s*(.+)$", text),
             ["Lark / 1.0.0 / 1.0.86 / docx-v1-raw-content-v1 (normalizer only); Codex / 1.0.0 / 0.153.0 / rollout-jsonl-v1."],
@@ -264,7 +277,6 @@ class SkillContractTest(unittest.TestCase):
             "`parent_event_id` need not equal the child start ID",
         ):
             self.assertIn(requirement, normalized)
-
     def test_adapter_contract_defines_json_parser_resource_budgets(self) -> None:
         normalized = " ".join(
             ADAPTER_CONTRACT_FILE.read_text(encoding="utf-8").split()
@@ -408,8 +420,8 @@ class SkillContractTest(unittest.TestCase):
         for required in (
             "do not read source content",
             "do not install",
-            "ask only",
-            "not implemented",
+            "ask at most",
+            "unavailable",
         ):
             self.assertIn(required, text)
         for forbidden in ("automatically install", "scan all accessible", "follow every link"):
@@ -508,8 +520,12 @@ class SkillContractTest(unittest.TestCase):
                     "rollout adapter tuple are available",
                     text,
                 )
-                self.assertIn("trusted dual-source ingestion", text)
-                self.assertIn("claude code and trae", text)
+                self.assertIn("dependency-injected", text)
+                self.assertIn("dual-source ingestion", text)
+                self.assertIn("production lark runtime", text)
+                self.assertIn("production codex runtime", text)
+                self.assertIn("claude code adapter", text)
+                self.assertIn("trae adapter", text)
                 self.assertIn(
                     "validation proves only that the graph conforms to an allowlisted "
                     "exact tuple and the canonical contract",
@@ -538,6 +554,161 @@ class SkillContractTest(unittest.TestCase):
         self.assertIn("does not grant source access", text)
         self.assertIn("does not authorize external mutation", text)
         self.assertIn("do not place source content", text)
+
+    def test_public_guidance_exposes_the_exact_supported_core_commands(self) -> None:
+        commands = (
+            "ingest-source /absolute/path/to/task-workspace /absolute/path/to/lark-request.json",
+            "ingest-source /absolute/path/to/task-workspace /absolute/path/to/codex-request.json",
+            "validate-knowledge-packet /absolute/path/to/knowledge-packet.json",
+            "next-critical-question /absolute/path/to/knowledge-packet.json",
+            "adjudicate-knowledge-packet /absolute/path/to/task-workspace /absolute/path/to/knowledge-packet.json --transaction-id DECISION_ID --expected-generation-id GENERATION_ID",
+            "compile-capability /absolute/path/to/task-workspace /absolute/path/to/knowledge-packet.json --transaction-id COMPILE_ID --expected-generation-id GENERATION_ID",
+        )
+        for name, path, prefix in (
+            ("workflow.md", WORKFLOW_FILE, "python3 scripts/kd.py "),
+            ("README.md", README_FILE,
+             "python3 knowledge-distiller/scripts/kd.py "),
+        ):
+            lines = {" ".join(line.split()) for line in
+                     path.read_text(encoding="utf-8").splitlines()}
+            with self.subTest(file=name):
+                for command in commands:
+                    self.assertIn(prefix + command, lines)
+
+    def test_core_guidance_defines_authority_provenance_and_question_boundaries(self) -> None:
+        combined = " ".join((
+            self.skill_text(),
+            WORKFLOW_FILE.read_text(encoding="utf-8"),
+            AUTHORIZATION_FILE.read_text(encoding="utf-8"),
+        )).lower()
+        normalized = " ".join(combined.split())
+        for requirement in (
+            "one source selector and pinned revision or closed session range",
+            "contentgrant and authorityattestation",
+            "before every source read",
+            "source snapshot → native evidence → redacted span → contentgrant → authorityattestation",
+            "ask at most one critical question at a time",
+            "lower-impact uncertainty does not block progress",
+            "exact adjudicated packet bytes",
+            "explicitly confirm the selected capability and every claim",
+            "does not authenticate the current user",
+            "do not generate or infer user confirmation",
+            "does not install or export",
+        ):
+            self.assertIn(requirement, normalized)
+
+    def test_workflow_matches_mode_specific_post_ingestion_phases(self) -> None:
+        normalized = " ".join(
+            WORKFLOW_FILE.read_text(encoding="utf-8").lower().split())
+        self.assertIn("`discover` advances to `map`", normalized)
+        self.assertIn(
+            "`capability_map_ready` then advances to `capability-review`",
+            normalized,
+        )
+        self.assertIn(
+            "`distill` and `update` advance directly to `capability-review`",
+            normalized,
+        )
+
+    def test_ingestion_shell_examples_are_syntax_only(self) -> None:
+        for name, path in (
+            ("SKILL.md", SKILL_FILE),
+            ("workflow.md", WORKFLOW_FILE),
+            ("README.md", README_FILE),
+        ):
+            normalized = " ".join(
+                path.read_text(encoding="utf-8").lower().split())
+            with self.subTest(file=name):
+                self.assertIn("embedded api boundary", normalized)
+                self.assertIn("syntax only", normalized)
+                self.assertIn("ingestion-runtime-unavailable", normalized)
+                self.assertIn("before reading the request file", normalized)
+
+    def test_guidance_names_every_unavailable_boundary(self) -> None:
+        for name, path in (("SKILL.md", SKILL_FILE), ("README.md", README_FILE)):
+            paragraphs = [" ".join(part.lower().split()) for part in
+                          path.read_text(encoding="utf-8").split("\n\n")]
+            with self.subTest(file=name):
+                unavailable = next(
+                    (part for part in paragraphs
+                     if "automatic discovery" in part and "unavailable" in part),
+                    "",
+                )
+                self.assertTrue(unavailable)
+                for boundary in (
+                    "automatic discovery",
+                    "production lark runtime",
+                    "production codex runtime",
+                    "claude code adapter",
+                    "trae adapter",
+                    "sealed evaluation",
+                    "approval signatures",
+                    "export",
+                    "installation",
+                    "publication",
+                ):
+                    self.assertIn(boundary, unavailable)
+
+    def test_artifact_guidance_matches_the_current_fixed_compiler(self) -> None:
+        for name, path in (
+            ("README.md", README_FILE),
+            ("artifact-policy.md", ARTIFACT_POLICY_FILE),
+        ):
+            normalized = " ".join(
+                path.read_text(encoding="utf-8").lower().split())
+            with self.subTest(file=name):
+                self.assertIn("fixed two-file", normalized)
+                self.assertIn("empty asset allowlist", normalized)
+                self.assertNotIn("future compiler may call", normalized)
+
+    def test_knowledge_packet_reference_is_sufficient_and_routed(self) -> None:
+        self.assertTrue(KNOWLEDGE_PACKET_FILE.is_file())
+        skill = self.skill_text()
+        self.assertIn("references/knowledge-packet.md", skill)
+        text = KNOWLEDGE_PACKET_FILE.read_text(encoding="utf-8")
+        normalized = " ".join(text.lower().split())
+        for field in (
+            "schema_version", "evidence", "claims", "decisions", "candidates",
+            "model", "questions", "uncertainties",
+        ):
+            self.assertIn(f"`{field}`", text)
+        for section in knowledge.SECTIONS:
+            self.assertIn(f'"{section}"', text)
+        for requirement in (
+            "knowledge-distiller.knowledge-packet/v1",
+            "behavior or claim question answer must become claimdecision",
+            "new-authority-required",
+            "trusted broker obtains a new active contentgrant and authorityattestation",
+            "never encode missing authority as claimdecision",
+            "questions must be empty before adjudication",
+            "exact same packet bytes",
+            "schema-valid synthetic skeleton",
+        ):
+            self.assertIn(requirement, normalized)
+        skeleton = re.search(
+            r"## Schema-valid synthetic skeleton.*?```json\n(.*?)\n```",
+            text,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(skeleton)
+        knowledge.validate_packet(json.loads(skeleton.group(1)))
+
+    def test_guidance_does_not_overclaim_live_revalidation_or_evidence_review(self) -> None:
+        combined = " ".join(
+            path.read_text(encoding="utf-8") for path in
+            (SKILL_FILE, WORKFLOW_FILE, README_FILE)
+        ).lower()
+        normalized = " ".join(combined.split())
+        self.assertNotIn("revalidates live provenance and grants", normalized)
+        self.assertIn(
+            "revalidates persisted provenance and recorded grant digest/time bounds",
+            normalized,
+        )
+        self.assertIn("bounded evidence review is unavailable", normalized)
+        self.assertIn(
+            "an explicit request does not create a supported evidence-output path",
+            normalized,
+        )
 
     def test_eval_set_covers_two_triggers_and_one_near_miss(self) -> None:
         self.assertTrue(EVAL_FILE.is_file(), "evals/evals.json must exist")
