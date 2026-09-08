@@ -1,26 +1,26 @@
 # Knowledge Distiller 实现状态
 
-更新时间：2026-09-07（Asia/Shanghai）
+更新时间：2026-09-08（Asia/Shanghai）
 
 ## 当前结论
 
-`knowledge-distiller` 已完成既有 adapter-contract 里程碑，以及 core dual-source loop 的 Task 1–6。Task 6 的 version-pinned Codex local-session adapter 已通过实现、回归和独立终审；下一项为 Task 7 dual-source ingestion。
+`knowledge-distiller` 已完成既有 adapter-contract 里程碑，以及 core dual-source loop 的 Task 1–7。Task 7 已打通同一 task 内 Lark 云文档与 Codex 本地会话的双源累计 ingestion；下一项为 Task 8 evidence-to-skill core loop。
 
-主进程最新严格完整测试为 313/313 通过；Task 6 计划指定 conformance gate 为 79/79，Codex/contract/source/broker 扩展定向回归为 113/113。独立规格终审为 `SPEC PASS`，独立质量终审为 `READY`，无 Critical/Important 遗留；终审后的 `compileall` 与 `git diff --check` 均通过。完整验证命令为：
+Task 7 的独立规格终审为 `SPEC PASS`，独立质量终审为 `READY`，Critical、Important、Minor 均无遗留。计划指定套件为 84/84，独立与主进程严格全量验证均为 329/329；`compileall` 与 `git diff --check` 均通过。完整验证命令为：
 
 ```bash
 PYTHONWARNINGS=error python3 -m unittest discover -s tests -v
 ```
 
-精确 tuple `lark / 1.0.0 / 1.0.86 / docx-v1-raw-content-v1` 为 `normalizer-supported`；`codex / 1.0.0 / 0.153.0 / rollout-jsonl-v1` 已进入 event-graph allowlist 并通过 conformance。二者均不授权未来读取，也不代表 trusted ingestion 已完成；Claude Code 与 Trae session adapter 仍为 `blocked`。
+精确 tuple `lark / 1.0.0 / 1.0.86 / docx-v1-raw-content-v1` 为 `normalizer-supported`；`codex / 1.0.0 / 0.153.0 / rollout-jsonl-v1` 已进入 event-graph allowlist 并通过 conformance。Task 7 提供 dependency-injected trusted ingestion runtime 边界，但没有默认 production runtime，也不授权未来读取；Claude Code 与 Trae session adapter 仍为 `blocked`。
 
 ## 分支与提交
 
 - 当前分支：`feat/implement_knowledge_distiller`
-- 最新实现提交：`fafbd98 feat: add pinned Codex session adapter`
-- Task 6 已提交、已完成独立终审与修复闭环
+- 最新实现提交：`77f5df0 feat: add atomic dual-source ingestion`
+- Task 7 已提交、已完成独立规格与质量终审闭环
 - 未 push、未 merge、未安装、未导出、未发布
-- 本 completion record 提交后相对本地 `origin/main` ahead 50、behind 0
+- 本 completion record 提交后相对本地 `origin/main` ahead 52、behind 0
 
 已完成的本地提交：
 
@@ -44,6 +44,8 @@ PYTHONWARNINGS=error python3 -m unittest discover -s tests -v
 | `89edbe9` | 已完成并通过独立评审 | typed document 转换前资源预检与冗余收敛 |
 | `1996505` | 已提交 | Task 5 completion record |
 | `fafbd98` | 已完成并通过独立评审 | 精确版本 Codex rollout adapter、合成 fixture 与 fail-closed 因果边界 |
+| `80cb90d` | 已提交 | Task 6 completion record |
+| `77f5df0` | 已完成并通过独立评审 | 同一 task 的 Lark/Codex 双源原子 ingestion、完整 evidence/provenance 与 TOCTOU 防护 |
 
 本次 completion-record 提交只记录计划与状态，不在文档中写入自引用 SHA。Task 1/2/3/4 的中间 review gate 和 Task 5 最终 review gate 均已完成。
 
@@ -172,12 +174,19 @@ Task 6 已完成主进程实现：新增纯内存、无 I/O 的 Codex `0.153.0 /
 
 Task 6 独立规格终审为 `SPEC PASS`，质量终审在发现两项 Important 后完成修复复审并给出 `READY`：cross-agent native shape 无法显式绑定 message、recipient 与实际消费动作，现全部 fail closed，不再臆造 sent/delivered/consumed；task lifecycle 增加 pinned scalar、非负范围、完成时序、唯一 start 与 `started_at` binding。代码精简审查删除了 60 余行不可安全到达的 cross-agent event/loss/追踪逻辑，以及 `item_completed` 在必然隔离前的冗余 schema 解析。最终无 Critical/Important/Minor 遗留。
 
+Task 7 已完成实现：新增 dependency-injected `ingest-source` orchestration 与明确的 Lark/Codex `AcquisitionDispatch`。私有 request 只由 trusted host decoder 解释；未注入 runtime 时 CLI 在读取 request 文件前拒绝。每次命令只调用一个 source-specific acquisition handler，并在 source I/O 前完成 grant/attestation、generation、phase、source kind、dispatch 与 redaction key 校验。
+
+同一 task 现在通过 `SOURCE_SNAPSHOTTED` 自环累计第一份来源，仍停留在 `INGEST`；第二个不同 source 成功后才以 `SOURCES_SNAPSHOTTED` 进入 `CAPABILITY_REVIEW`。第二次事务先验证并继承第一代私有 artifacts，Lark/Codex 各自使用独立 grant/source/evidence/provenance 路径。重复来源、错误 phase、stale generation 和不完整 artifact 分组均在新 source read 前拒绝；第二来源失败或 crash 不会替换已提交的第一代。
+
+ingestion lease 覆盖 acquisition、normalization 与 commit，阻止并发重复读取。callback 只能获得 request/context/grant/attestation 的隔离重建副本，返回后所有 snapshot binding、redaction、provenance 与持久化都使用 acquisition 前固定的私有副本，关闭 `object.__setattr__` TOCTOU。broker snapshot 的 raw/source/selector digest、owner、revision/range、Codex prefix、product/version/schema 和嵌套 exact types 均重新验证；原始 source 不进入 journal 或 CLI，原子私有 generation 仅保存 normalized/redacted snapshot、native evidence、完整五段 derivation provenance 和按来源区分的授权记录。
+
+Task 7 全部回归只使用 synthetic fixture；没有再次读取真实 Lark 文档或本地 Codex session。规格终审为 `SPEC PASS`，质量终审为 `READY`，Critical、Important、Minor 均无遗留。质量评审要求持续包含代码精简与冗余检查；pinning/clone、双层 runtime/library validation 与 lease 内 artifact 继承均被确认是必要安全边界，已抽取共享 dispatch/native-request helper 并使用固定路径映射。
+
 ### 产品里程碑
 
 - Claude Code、Trae session adapters 的 content-authorized fixtures 与版本兼容性验证。
 - DiscoveryGrant、MetadataGrant、ContentGrant、AuthorityAttestation 的持久化与 broker binding。
-- Lark production credential runner、完整 ingestion transaction 和本地 session descriptor broker 集成。
-- Lark/Codex dual-source ingestion persistence。
+- Lark production credential runtime 与 Codex local-session identity runtime 的默认 wiring。
 - provenance/evidence/claim/capability knowledge model。
 - critical-question policy 与 skill compiler。
 - sealed evaluator、ApprovalSubject、VersionApproval。
