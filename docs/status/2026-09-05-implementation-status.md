@@ -4,9 +4,9 @@
 
 ## 当前结论
 
-`knowledge-distiller` 已完成既有 adapter-contract 里程碑，以及 core dual-source loop 的 Task 1–7。Task 7 已打通同一 task 内 Lark 云文档与 Codex 本地会话的双源累计 ingestion；下一项为 Task 8 evidence-to-skill core loop。
+`knowledge-distiller` 已完成既有 adapter-contract 里程碑，以及 core dual-source loop 的 Task 1–8。Task 8 已打通严格 knowledge packet、确定性 capability scoring、单一关键问题、显式 claim adjudication 与非安装式 skill draft compiler；下一项为 Task 9，把真实核心路径准确写入 skill guidance。
 
-Task 7 的独立规格终审为 `SPEC PASS`，独立质量终审为 `READY`，Critical、Important、Minor 均无遗留。计划指定套件为 84/84，独立与主进程严格全量验证均为 329/329；`compileall` 与 `git diff --check` 均通过。完整验证命令为：
+Task 8 独立质量终审为 `READY`，Critical、Important 均无遗留，唯一重复校验 Minor 已删除。计划指定四模块套件为 87/87，含 state 回归为 102/102，严格全量验证为 356/356；`compileall` 与 `git diff --check` 均通过。完整验证命令为：
 
 ```bash
 PYTHONWARNINGS=error python3 -m unittest discover -s tests -v
@@ -17,10 +17,10 @@ PYTHONWARNINGS=error python3 -m unittest discover -s tests -v
 ## 分支与提交
 
 - 当前分支：`feat/implement_knowledge_distiller`
-- 最新实现提交：`77f5df0 feat: add atomic dual-source ingestion`
-- Task 7 已提交、已完成独立规格与质量终审闭环
+- 最新实现提交：`0e84387 feat: add evidence-to-skill compiler loop`
+- Task 8 已提交、已完成独立质量终审闭环
 - 未 push、未 merge、未安装、未导出、未发布
-- 本 completion record 提交后相对本地 `origin/main` ahead 52、behind 0
+- 本状态记录提交后相对本地 `origin/main` ahead 54、behind 0
 
 已完成的本地提交：
 
@@ -182,13 +182,17 @@ ingestion lease 覆盖 acquisition、normalization 与 commit，阻止并发重�
 
 Task 7 全部回归只使用 synthetic fixture；没有再次读取真实 Lark 文档或本地 Codex session。规格终审为 `SPEC PASS`，质量终审为 `READY`，Critical、Important、Minor 均无遗留。质量评审要求持续包含代码精简与冗余检查；pinning/clone、双层 runtime/library validation 与 lease 内 artifact 继承均被确认是必要安全边界，已抽取共享 dispatch/native-request helper 并使用固定路径映射。
 
+Task 8 已完成实现：新增严格、closed、bounded 的 knowledge packet，覆盖 evidence、claim、current-user decision、candidate、capability model、critical question 与 lower-impact uncertainty。每条 claim 必须绑定支持证据与 redacted span provenance；评分按 recurrence、decision impact、evidence coverage、testability 确定性计算，并按 impact、testability、稳定 ID 破同分。每次只选择至多一个行为关键问题，推荐项必须有问题证据支持。
+
+编译路径现在要求 extraction 后无条件进入 `CLAIM_REVIEW`，`adjudicate-knowledge-packet` 先原子保存精确 packet、选中 capability 与 claim decisions，`compile-capability` 只接受逐字节一致的已裁决 packet。编译前重新绑定两类 source snapshot、native evidence、redacted span、五段 provenance、ContentGrant 与 AuthorityAttestation digest/有效期；只把 confirmed 且 publishable 的 guidance 渲染为固定 `SKILL.md` 与 `references/capability.md`，再调用既有 artifact validator，原子保存精确 bytes 与 manifest。不会安装或导出 draft。
+
+Task 8 质量评审先发现大小写可绕过的私有标识匹配、通用概念误报、直接 `EXTRACT → COMPILE` 死路径与重复 preflight。当前使用 NFC + casefold 的 scoped sensitive-value 匹配，明确跳过不足 4 UTF-8 bytes 的歧义短值，移除通用词 blacklist；所有 extraction 都经过独立 adjudication，隐私与 artifact 预检集中为单一入口。复审结论为 `READY`，无 Critical/Important，代码精简 Minor 已处理。全部测试仅使用 synthetic fixture，未读取真实 Lark 文档或本地 Codex session。
+
 ### 产品里程碑
 
 - Claude Code、Trae session adapters 的 content-authorized fixtures 与版本兼容性验证。
 - DiscoveryGrant、MetadataGrant、ContentGrant、AuthorityAttestation 的持久化与 broker binding。
 - Lark production credential runtime 与 Codex local-session identity runtime 的默认 wiring。
-- provenance/evidence/claim/capability knowledge model。
-- critical-question policy 与 skill compiler。
 - sealed evaluator、ApprovalSubject、VersionApproval。
 - export consent、purge、audit 与 stale-export repair。
 

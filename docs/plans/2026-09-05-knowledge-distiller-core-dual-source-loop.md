@@ -257,31 +257,33 @@ The first native session target is Codex because it exercises the local CLI-sess
 - Modify: `knowledge-distiller/scripts/kd.py`
 - Modify: `tests/test_cli.py`
 
-- [ ] **Step 1: Write failing evidence and claim-contract tests**
+- [x] **Step 1: Write failing evidence and claim-contract tests**
 
   Define strict `EvidenceRecord`, `Claim`, `ClaimDecision`, `CapabilityCandidate`, and `CapabilityModel` records. Require every claim to link to one or more redacted spans, distinguish observation/owner-statement/inference, carry support and contradiction links, confidence/freshness/sensitivity, and remain proposed until explicitly adjudicated. A hard invariant may compile only from confirmed claims or an explicit current user decision.
 
-- [ ] **Step 2: Implement deterministic validation and capability scoring**
+- [x] **Step 2: Implement deterministic validation and capability scoring**
 
   Score recurrence, decision impact, evidence coverage, and testability from 0-3, show component scores, and break ties by decision impact then testability. Keep free-form model generation outside the trusted validator: the active agent proposes a strict JSON packet; local code validates IDs, provenance, status, and bounds before persistence.
 
-- [ ] **Step 3: Implement the critical-question queue**
+- [x] **Step 3: Implement the critical-question queue**
 
   Emit at most one question when competing rules materially change behavior, a critical branch is blocked, a hard constraint lacks evidence, or new authority is required. Record lower-impact uncertainty without stopping. Require alternatives, evidence IDs, behavioral impact, confidence, and a recommendation only when evidence supports it.
 
-- [ ] **Step 4: Write failing compiler tests**
+- [x] **Step 4: Write failing compiler tests**
 
   Compile one selected capability into `SKILL.md` plus allowlisted one-level references. Test triggers/non-triggers, goals/non-goals, inputs/outputs, invariants, cues, decision rules, adaptive workflow, exceptions, failures/recovery, examples, and dependencies. Prove private excerpts, selectors, participant identifiers, grants, provenance internals, scripts, package manifests, and executable instructions cannot enter the draft.
 
-- [ ] **Step 5: Implement compiler and core CLI commands**
+- [x] **Step 5: Implement compiler and core CLI commands**
 
-  Add `validate-knowledge-packet`, `next-critical-question`, and `compile-capability`. The compiler must call the existing artifact validator and persist the exact validated bytes and manifest; it must not install or export the draft.
+  Add `validate-knowledge-packet`, `next-critical-question`, and `compile-capability`. The compiler must call the existing artifact validator and persist the exact validated bytes and manifest; it must not install or export the draft. Review added `adjudicate-knowledge-packet` as the required distinct current-user decision boundary before compilation.
 
-- [ ] **Step 6: Run knowledge, compiler, artifact, and CLI tests green**
+- [x] **Step 6: Run knowledge, compiler, artifact, and CLI tests green**
 
   Run: `python3 -m unittest tests.test_knowledge tests.test_compiler tests.test_artifacts tests.test_cli -v`
 
   Expected: PASS.
+
+  Result: 87/87 for the exact four-module command; 102/102 including state-machine regression coverage. Strict full-suite verification passed 356/356. Independent quality review returned `READY` with no Critical or Important findings after privacy-matcher, adjudication-path, and redundancy fixes.
 
 ### Task 9: Integrate the real core path into the skill guidance
 
