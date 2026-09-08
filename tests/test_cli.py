@@ -17,12 +17,72 @@ CLI = ROOT / "knowledge-distiller" / "scripts" / "kd.py"
 sys.path.insert(0, str(ROOT / "knowledge-distiller" / "scripts"))
 
 import kd as kd_cli  # noqa: E402
-from knowledge_distiller import adapters  # noqa: E402
+from knowledge_distiller import adapters, ingestion  # noqa: E402
 from knowledge_distiller import source_io  # noqa: E402
 from knowledge_distiller.persistence import TaskCoordinator, create_task  # noqa: E402
 
 
 class CliTest(unittest.TestCase):
+    def test_ingest_source_requires_trusted_runtime_before_request_read(self) -> None:
+        with mock.patch.object(source_io, "read_source") as reader, mock.patch.object(
+                kd_cli.sys, "stderr", io.StringIO()) as stderr:
+            code = kd_cli.main(("ingest-source", "task", "private-request.json"))
+        self.assertEqual(code, 2)
+        self.assertEqual(json.loads(stderr.getvalue())["error"], {
+            "code": "invalid-input", "reason": "ingestion-runtime-unavailable"})
+        reader.assert_not_called()
+
+    def test_ingest_source_emits_only_bounded_manifest_fields(self) -> None:
+        result = ingestion.IngestionResult(
+            status="snapshotted", source_kind="session",
+            source_snapshot_id="sha256:" + "a" * 64,
+            canonical_digest="sha256:" + "b" * 64,
+            source_byte_count=100, source_item_count=2,
+            generation_id="g-synthetic", manifest_digest="c" * 64)
+        runtime = object()
+        with mock.patch.object(source_io, "read_source", return_value=b"synthetic-request") as read, \
+                mock.patch.object(ingestion, "ingest_request_bytes", return_value=result) as ingest:
+            payload = kd_cli._run(
+                ("ingest-source", "task-root", "private-request.json"),
+                ingestion_runtime=runtime)
+        read.assert_called_once_with("private-request.json", max_bytes=ingestion.MAX_REQUEST_BYTES)
+        ingest.assert_called_once_with(Path("task-root"), b"synthetic-request", runtime=runtime)
+        self.assertEqual(payload, {"ok": True, "ingestion": {
+            "status": "snapshotted", "source_kind": "session",
+            "source_snapshot_id": "sha256:" + "a" * 64,
+            "canonical_digest": "sha256:" + "b" * 64,
+            "source_byte_count": 100, "source_item_count": 2,
+            "generation_id": "g-synthetic", "manifest_digest": "c" * 64}})
+
+    def test_ingest_source_maps_private_failures_without_leaking_request(self) -> None:
+        secret = "PRIVATE-SOURCE-REQUEST"
+        runtime = object()
+        with mock.patch.object(source_io, "read_source", return_value=secret.encode()), \
+                mock.patch.object(
+                    ingestion, "ingest_request_bytes",
+                    side_effect=ingestion.IngestionError("authorization-revoked")), \
+                mock.patch.object(kd_cli.sys, "stderr", io.StringIO()) as stderr:
+            code = kd_cli.main(
+                ("ingest-source", "task-root", secret + ".json"),
+                ingestion_runtime=runtime)
+        self.assertEqual(code, 3)
+        self.assertEqual(json.loads(stderr.getvalue())["error"], {
+            "code": "source-ingestion-rejected", "reason": "authorization-revoked"})
+        self.assertNotIn(secret, stderr.getvalue())
+
+        with mock.patch.object(source_io, "read_source", return_value=b"request"), \
+                mock.patch.object(
+                    ingestion, "ingest_request_bytes",
+                    side_effect=ingestion.IngestionError("UNSAFE-RAW-SECRET")), \
+                mock.patch.object(kd_cli.sys, "stderr", io.StringIO()) as unsafe_stderr:
+            code = kd_cli.main(
+                ("ingest-source", "task-root", "request.json"),
+                ingestion_runtime=runtime)
+        self.assertEqual(code, 3)
+        self.assertEqual(json.loads(unsafe_stderr.getvalue())["error"]["reason"],
+                         "ingestion-failed")
+        self.assertNotIn("UNSAFE-RAW-SECRET", unsafe_stderr.getvalue())
+
     def test_event_graph_delegates_to_shared_source_boundary(self) -> None:
         with mock.patch.object(source_io, "read_source", return_value=b"{}") as reader:
             self.assertEqual(kd_cli._read_event_graph("exact.json"), b"{}")

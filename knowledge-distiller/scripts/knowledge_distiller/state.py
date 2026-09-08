@@ -43,6 +43,7 @@ class Event(str, Enum):
     SCOUT_COMPLETED = "scout-completed"
     SOURCES_REJECTED = "sources-rejected"
     CONTENT_GRANTED = "content-granted"
+    SOURCE_SNAPSHOTTED = "source-snapshotted"
     SOURCES_SNAPSHOTTED = "sources-snapshotted"
     CAPABILITY_MAP_READY = "capability-map-ready"
     CAPABILITY_SELECTED = "capability-selected"
@@ -142,6 +143,7 @@ class TransitionFacts:
     metadata_grant: bool = False
     content_grant: bool = False
     authority_valid: bool = False
+    source_ready: bool = False
     sources_ready: bool = False
     capability_map_ready: bool = False
     evidence_complete: bool = False
@@ -301,6 +303,10 @@ def transition(state: TaskState, event: Event, facts: TransitionFacts) -> TaskSt
         _at(state, Phase.SOURCE_REVIEW, event)
         _require(facts, "content_grant", "authority_valid")
         return replace(state, phase=Phase.INGEST)
+    if event is Event.SOURCE_SNAPSHOTTED:
+        _at(state, Phase.INGEST, event)
+        _require(facts, "source_ready")
+        return state
     if event is Event.SOURCES_SNAPSHOTTED:
         _at(state, Phase.INGEST, event)
         _require(facts, "sources_ready")

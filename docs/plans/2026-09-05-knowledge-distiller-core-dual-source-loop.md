@@ -232,13 +232,15 @@ The first native session target is Codex because it exercises the local CLI-sess
 - Create: `knowledge-distiller/scripts/knowledge_distiller/ingestion.py`
 - Create: `tests/test_ingestion.py`
 - Modify: `knowledge-distiller/scripts/kd.py`
+- Modify: `knowledge-distiller/scripts/knowledge_distiller/state.py`
 - Modify: `tests/test_cli.py`
+- Modify: `tests/test_state.py`
 
-- [ ] **Step 1: Write failing `ingest-source` CLI tests**
+- [x] **Step 1: Write failing `ingest-source` CLI tests**
 
   Add an explicit command that consumes a private source request file, validates authorization, invokes exactly one adapter, persists the normalized/redacted snapshot atomically, and emits only source type, counts, digests, status, and bounded error codes. Cover Lark and Codex success using injected fixtures, plus revoked/expired grants, principal mismatch, schema drift, source change, partial ingestion, and crash recovery.
 
-- [ ] **Step 2: Implement the orchestration and run tests green**
+- [x] **Step 2: Implement the orchestration and run tests green**
 
   Run: `python3 -m unittest tests.test_redaction tests.test_ingestion tests.test_cli -v`
 

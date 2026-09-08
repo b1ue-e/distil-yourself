@@ -25,6 +25,9 @@ from . import adapters, redaction, sources
 
 
 LARK_RAW_CONTENT_ADAPTER = adapters.AdapterIdentity(*adapters.LARK_RAW_CONTENT_ADAPTER)
+LARK_NATIVE_SCHEMA_DIGEST = (
+    "sha256:9ea00db953bf91884d198de7a10282a0c519cefc0065b5f113bc8cce528d273f"
+)
 CODEX_ROLLOUT_ADAPTER = adapters.AdapterIdentity(*adapters.CODEX_ROLLOUT_ADAPTER)
 _CODEX_SCHEMA_DESCRIPTOR = (
     b"codex-rollout-jsonl-v1\x00outer:timestamp,type,payload,ordinal\x00"

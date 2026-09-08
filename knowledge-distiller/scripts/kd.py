@@ -17,7 +17,7 @@ from knowledge_distiller.adapters import (
     validate_validation_context,
 )
 from knowledge_distiller.artifacts import DraftValidationError, validate_draft
-from knowledge_distiller import source_io
+from knowledge_distiller import ingestion, source_io
 from knowledge_distiller.persistence import (
     TaskBusyError,
     TaskPersistenceError,
@@ -138,6 +138,13 @@ def _read_event_graph(path: str) -> bytes:
         raise CliInputError(error.code) from None
 
 
+def _read_ingestion_request(path: str) -> bytes:
+    try:
+        return source_io.read_source(path, max_bytes=ingestion.MAX_REQUEST_BYTES)
+    except source_io.SourceIOError as error:
+        raise CliInputError(error.code) from None
+
+
 def _validate_event_graph(
     path: str,
     expected_owner_id: str,
@@ -179,6 +186,10 @@ def _build_parser() -> JsonArgumentParser:
     validate_graph.add_argument("--expected-owner-id", required=True)
     validate_graph.add_argument("--expected-source-snapshot-id", required=True)
 
+    ingest = commands.add_parser("ingest-source")
+    ingest.add_argument("task_path")
+    ingest.add_argument("request_path")
+
     state_transition = commands.add_parser("transition")
     state_transition.add_argument("--state", required=True)
     state_transition.add_argument("--event", required=True)
@@ -198,7 +209,7 @@ def _build_parser() -> JsonArgumentParser:
     return parser
 
 
-def _run(arguments: Sequence[str]) -> Dict[str, Any]:
+def _run(arguments: Sequence[str], *, ingestion_runtime=None) -> Dict[str, Any]:
     options = _build_parser().parse_args(arguments)
     if options.command == "validate-draft":
         manifest = validate_draft(Path(options.path))
@@ -213,6 +224,14 @@ def _run(arguments: Sequence[str]) -> Dict[str, Any]:
                 options.expected_source_snapshot_id,
             ),
         }
+
+    if options.command == "ingest-source":
+        if ingestion_runtime is None:
+            raise CliInputError("ingestion-runtime-unavailable")
+        raw = _read_ingestion_request(options.request_path)
+        result = ingestion.ingest_request_bytes(
+            Path(options.task_path), raw, runtime=ingestion_runtime)
+        return {"ok": True, "ingestion": asdict(result)}
 
     if options.command == "task-init":
         return {"ok": True, "task": _snapshot_payload(create_task(Path(options.path)))}
@@ -239,9 +258,11 @@ def _run(arguments: Sequence[str]) -> Dict[str, Any]:
     return {"ok": True, "state": _state_payload(result)}
 
 
-def main(arguments: Optional[Sequence[str]] = None) -> int:
+def main(arguments: Optional[Sequence[str]] = None, *, ingestion_runtime=None) -> int:
     try:
-        payload = _run(sys.argv[1:] if arguments is None else arguments)
+        payload = _run(
+            sys.argv[1:] if arguments is None else arguments,
+            ingestion_runtime=ingestion_runtime)
     except CliInputError as error:
         _emit(
             {"ok": False, "error": {"code": "invalid-input", "reason": error.reason}},
@@ -260,6 +281,13 @@ def main(arguments: Optional[Sequence[str]] = None) -> int:
                 "ok": False,
                 "error": {"code": "event-graph-rejected", "reason": error.code},
             },
+            sys.stderr,
+        )
+        return 3
+    except ingestion.IngestionError as error:
+        _emit(
+            {"ok": False, "error": {
+                "code": "source-ingestion-rejected", "reason": error.code}},
             sys.stderr,
         )
         return 3

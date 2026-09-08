@@ -123,6 +123,19 @@ class StateTransitionTest(unittest.TestCase):
         )
         self.assertEqual(result.phase, Phase.INGEST)
 
+        partial = transition(
+            result,
+            Event.SOURCE_SNAPSHOTTED,
+            TransitionFacts(source_ready=True),
+        )
+        self.assertEqual(partial.phase, Phase.INGEST)
+        completed = transition(
+            partial,
+            Event.SOURCES_SNAPSHOTTED,
+            TransitionFacts(sources_ready=True),
+        )
+        self.assertEqual(completed.phase, Phase.CAPABILITY_REVIEW)
+
     def test_rejecting_all_sources_ends_with_partial_report(self) -> None:
         state = TaskState(mode=Mode.DISCOVER, phase=Phase.SOURCE_REVIEW)
         result = transition(state, Event.SOURCES_REJECTED, TransitionFacts())
