@@ -295,6 +295,10 @@ class BrokerTest(unittest.TestCase):
         self.assertEqual(
             brokers.session_selector_commitment("/private/session.jsonl"),
             digest(raw))
+        unicode_path = "Hamüss/session.jsonl"
+        self.assertEqual(
+            brokers.session_selector_commitment(unicode_path),
+            digest(b"local-session-selector\x00" + unicode_path.encode("utf-8")))
         self.assertRegex(
             brokers.session_selector_commitment("a" * 4096),
             r"^sha256:[0-9a-f]{64}$")

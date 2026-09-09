@@ -317,9 +317,51 @@ class IngestionTest(unittest.TestCase):
         self.assertEqual(calls, ["codex"])
         generation = self.root / "generations" / result.generation_id
         persisted = b"".join(
-            path.read_bytes() for path in generation.rglob("*") if path.is_file())
+            path.read_bytes() for path in self.root.rglob("*") if path.is_file())
         self.assertNotIn(private_path.encode("utf-8"), persisted)
-        self.assertIn(commitment.encode("ascii"), persisted)
+        generation_bytes = b"".join(
+            path.read_bytes() for path in generation.rglob("*") if path.is_file())
+        self.assertIn(commitment.encode("ascii"), generation_bytes)
+
+    def test_codex_path_subclass_cannot_bypass_commitment_binding(self):
+        class SubstitutedPath(str):
+            def __eq__(self, other):
+                return True
+
+            def __ne__(self, other):
+                return False
+
+        raw = (ROOT / "tests/fixtures/adapters/codex/0.153.0/"
+               "rollout-jsonl-v1/redacted-current.jsonl").read_bytes()
+        private_path = "/PRIVATE/session.jsonl"
+        commitment = brokers.session_selector_commitment(private_path)
+        bounds = authorization.SessionRange(0, len(raw) - 1)
+        context, grant, attestation = self.authorization(
+            commitment, session_range=bounds)
+        request = ingestion.IngestionRequest(
+            "codex", "ingest-subclass-selector",
+            self.ingest_state.generation_id,
+            context, grant, attestation,
+            brokers.SessionRequest(
+                SubstitutedPath("/PRIVATE/other.jsonl"), "project-1",
+                len(raw), digest(raw)),
+            "project-1")
+        acquired = replace(
+            self.snapshot(
+                raw, "codex", "0.153.0",
+                native_adapters.CODEX_NATIVE_SCHEMA_DIGEST, "project-1"),
+            selector_digest=digest(commitment))
+
+        with mock.patch.object(
+                ingestion, "_normalize", wraps=ingestion._normalize) as normalize:
+            with self.assertRaises(ingestion.IngestionError) as caught:
+                self.ingest(request, acquired)
+
+        self.assertEqual(caught.exception.code, "invalid-broker-request")
+        normalize.assert_not_called()
+        self.assertEqual(
+            inspect_task(self.root).generation_id,
+            self.ingest_state.generation_id)
 
     def test_actual_dual_ingestion_outputs_compile_to_closed_draft(self):
         processing_until = 4_102_444_800

@@ -269,6 +269,8 @@ def _validated_snapshot(snapshot, request):
     else:
         native_request = request.native_request
         source_range = context.session_range
+        if type(native_request.path) is not str:
+            _fail("invalid-broker-request")
         selector_matches = (
             native_request.path == context.selector
             or brokers.session_selector_commitment(native_request.path)
