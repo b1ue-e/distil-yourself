@@ -1,10 +1,11 @@
 """One descriptor boundary for explicitly selected regular input files.
 
-Preserves the event-graph input policy: no links, sparse or special files; no
-additional owner/mode/xattr policy (private task persistence is a different
-boundary). Paths are walked without normalization or symlink traversal. Closed
-prefixes are checked twice against an externally pinned digest on one descriptor.
-Appends beyond that prefix are never read; they may change size/timestamps.
+Preserves the event-graph input policy: no links, sparse or special files.
+Ordinary callers remain unrestricted by owner or mode; opt-in owner and exact
+0600 mode checks are available for private task persistence. Paths are walked
+without normalization or symlink traversal. Closed prefixes are checked twice
+against an externally pinned digest on one descriptor. Appends beyond that
+prefix are never read; they may change size/timestamps.
 """
 
 import hashlib
@@ -137,7 +138,9 @@ def _read(descriptor: int, limit: int) -> bytes:
 
 def read_source(path: str, *, max_bytes: int = MAX_GRAPH_BYTES,
                 prefix_length: Optional[int] = None,
-                expected_digest: Optional[str] = None) -> bytes:
+                expected_digest: Optional[str] = None,
+                expected_owner_uid: Optional[int] = None,
+                owner_only: bool = False) -> bytes:
     """Read a stable file, or exactly [0, prefix_length) without later appends.
 
     Prefix mode requires both a positive length and a pinned SHA-256 digest.
@@ -157,16 +160,27 @@ def read_source(path: str, *, max_bytes: int = MAX_GRAPH_BYTES,
             raise SourceIOError("invalid-source-bound")
     elif expected_digest is not None:
         raise SourceIOError("invalid-source-bound")
+    if (expected_owner_uid is not None
+            and (type(expected_owner_uid) is not int or not 0 <= expected_owner_uid <= 9223372036854775807)):
+        raise SourceIOError("invalid-source-bound")
+    if type(owner_only) is not bool or (owner_only and expected_owner_uid is None):
+        raise SourceIOError("invalid-source-bound")
     descriptor = _open_source(path)
     try:
         metadata = _metadata(descriptor, "unsafe-source-file")
         _regular(metadata, None if prefix else max_bytes)
+        if expected_owner_uid is not None and metadata.st_uid != expected_owner_uid:
+            raise SourceIOError("source-owner-mismatch")
+        if owner_only and stat.S_IMODE(metadata.st_mode) != 0o600:
+            raise SourceIOError("unsafe-source-file")
         if prefix and metadata.st_size < prefix_length:
             raise SourceIOError("input-changed")
         content = _read(descriptor, prefix_length if prefix else max_bytes + 1)
         if len(content) > max_bytes:
             raise SourceIOError("source-file-too-large")
         identity_fields = ("st_dev", "st_ino", "st_nlink", "st_mode")
+        if expected_owner_uid is not None:
+            identity_fields += ("st_uid",)
         if prefix:
             if len(content) != prefix_length or "sha256:" + hashlib.sha256(content).hexdigest() != expected_digest:
                 raise SourceIOError("input-changed")
