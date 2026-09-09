@@ -1,26 +1,26 @@
 # Knowledge Distiller 实现状态
 
-更新时间：2026-09-08（Asia/Shanghai）
+更新时间：2026-09-09（Asia/Shanghai）
 
 ## 当前结论
 
-`knowledge-distiller` 已完成既有 adapter-contract 里程碑，以及 core dual-source loop 的 Task 1–8。Task 8 已打通严格 knowledge packet、确定性 capability scoring、单一关键问题、显式 claim adjudication 与非安装式 skill draft compiler；下一项为 Task 9，把真实核心路径准确写入 skill guidance。
+`knowledge-distiller` 已完成既有 adapter-contract 里程碑，以及 core dual-source loop 的 Task 1–10。当前完成的是可执行、dependency-injected、全合成/脱敏的核心纵向闭环：Lark 与 Codex ingestion 产物可进入 capability/claim adjudication，编译为固定非安装式 skill draft，并到达 `EVALUATE`。这不代表完整 v1 或 production runtime 已完成。
 
-Task 8 独立质量终审为 `READY`，Critical、Important 均无遗留，唯一重复校验 Minor 已删除。计划指定四模块套件为 87/87，含 state 回归为 102/102，严格全量验证为 356/356；`compileall` 与 `git diff --check` 均通过。完整验证命令为：
+Task 10 独立规格终审为 `SPEC PASS`，独立质量终审为 `READY`，Critical、Important、Minor 均无遗留。knowledge/compiler/ingestion/CLI 定向套件为 91/91，严格全量验证为 376/376；`compileall`、`git diff --check` 与仓库无 `__pycache__` 检查均通过。完整验证命令为：
 
 ```bash
-PYTHONWARNINGS=error python3 -m unittest discover -s tests -v
+PYTHONDONTWRITEBYTECODE=1 python3 -W error::ResourceWarning -m unittest discover -s tests -v
 ```
 
-精确 tuple `lark / 1.0.0 / 1.0.86 / docx-v1-raw-content-v1` 为 `normalizer-supported`；`codex / 1.0.0 / 0.153.0 / rollout-jsonl-v1` 已进入 event-graph allowlist 并通过 conformance。Task 7 提供 dependency-injected trusted ingestion runtime 边界，但没有默认 production runtime，也不授权未来读取；Claude Code 与 Trae session adapter 仍为 `blocked`。
+精确 tuple `lark / 1.0.0 / 1.0.86 / docx-v1-raw-content-v1` 为 `normalizer-supported`；`codex / 1.0.0 / 0.153.0 / rollout-jsonl-v1` 已进入 event-graph allowlist 并通过 conformance。Task 7 提供 dependency-injected trusted ingestion runtime 边界，但没有默认 production runtime，也不授权未来读取；Claude Code 与 Trae session adapter 仍为 `blocked`。真实 Lark/Codex host runtime、live revocation/issuer re-authentication、`current-user` 身份认证、parser sandbox、sealed evaluation、签名、导出、安装与发布均未实现。
 
 ## 分支与提交
 
 - 当前分支：`feat/implement_knowledge_distiller`
-- 最新实现提交：`0e84387 feat: add evidence-to-skill compiler loop`
-- Task 8 已提交、已完成独立质量终审闭环
+- 最新实现提交：`c312861 feat: close the synthetic dual-source core loop`
+- core dual-source loop Task 1–10 已完成规格与质量双审闭环
 - 未 push、未 merge、未安装、未导出、未发布
-- 本状态记录提交后相对本地 `origin/main` ahead 54、behind 0
+- 本状态记录提交后相对本地 `origin/main` ahead 57、behind 0
 
 已完成的本地提交：
 
@@ -46,6 +46,11 @@ PYTHONWARNINGS=error python3 -m unittest discover -s tests -v
 | `fafbd98` | 已完成并通过独立评审 | 精确版本 Codex rollout adapter、合成 fixture 与 fail-closed 因果边界 |
 | `80cb90d` | 已提交 | Task 6 completion record |
 | `77f5df0` | 已完成并通过独立评审 | 同一 task 的 Lark/Codex 双源原子 ingestion、完整 evidence/provenance 与 TOCTOU 防护 |
+| `d9433c8` | 已提交 | Task 7 completion record |
+| `0e84387` | 已完成并通过独立评审 | 严格 knowledge packet、显式 adjudication 与 evidence-to-skill compiler loop |
+| `5788fab` | 已提交 | Task 8 completion record |
+| `948c046` | 已完成并通过独立评审 | evidence-to-draft workflow guidance 与边界路由 |
+| `c312861` | 已完成并通过独立双审 | 合成双源纵向闭环、内容绑定 provenance、隐私/eligibility 收口与精简 |
 
 本次 completion-record 提交只记录计划与状态，不在文档中写入自引用 SHA。Task 1/2/3/4 的中间 review gate 和 Task 5 最终 review gate 均已完成。
 
@@ -187,6 +192,16 @@ Task 8 已完成实现：新增严格、closed、bounded 的 knowledge packet，
 编译路径现在要求 extraction 后无条件进入 `CLAIM_REVIEW`，`adjudicate-knowledge-packet` 先原子保存精确 packet、选中 capability 与 claim decisions，`compile-capability` 只接受逐字节一致的已裁决 packet。编译前重新绑定两类 source snapshot、native evidence、redacted span、五段 provenance、ContentGrant 与 AuthorityAttestation digest/有效期；只把 confirmed 且 publishable 的 guidance 渲染为固定 `SKILL.md` 与 `references/capability.md`，再调用既有 artifact validator，原子保存精确 bytes 与 manifest。不会安装或导出 draft。
 
 Task 8 质量评审先发现大小写可绕过的私有标识匹配、通用概念误报、直接 `EXTRACT → COMPILE` 死路径与重复 preflight。当前使用 NFC + casefold 的 scoped sensitive-value 匹配，明确跳过不足 4 UTF-8 bytes 的歧义短值，移除通用词 blacklist；所有 extraction 都经过独立 adjudication，隐私与 artifact 预检集中为单一入口。复审结论为 `READY`，无 Critical/Important，代码精简 Minor 已处理。全部测试仅使用 synthetic fixture，未读取真实 Lark 文档或本地 Codex session。
+
+Task 9 已完成 guidance integration：`SKILL.md`、workflow、authorization、knowledge-packet contract 与 README 现在准确路由 dual-source ingestion、单一关键问题、selected capability/claim confirmation、adjudication 和 compilation。Standalone `kd.py ingest-source` 明确在读取 private request 前返回 `ingestion-runtime-unavailable`；shell 示例只描述 embedded API 参数形态，不伪装 production runtime。bounded evidence review、自动 discovery、Claude Code/Trae、sealed evaluation、签名、export/install/publish/purge 均明确为不可用。skill-contract 为 25/25；独立 guidance review 为 `READY`，无遗留 finding。
+
+Task 10 已完成 synthetic core 的纵向验收与安全收口。合成测试直接使用真实 ingestion 代码产出的 Lark/Codex 私有 generation：claim-ineligible Lark span 只能作为 context/contradiction，所有被选中 claim 的 support evidence spans 都必须 owner-eligible，Codex owner span 作为唯一支持，经 capability selection、claim adjudication、compilation 到达 `EVALUATE`。source read expiry 只停止新读取；已脱敏 evidence 在独立 derived-processing 时限内仍可处理。
+
+编译现在私下持久化 `generated-section → compiled-rule → compiler-version / confirmed-claim → claim-decision` provenance。section ID 绑定精确 section content 与 draft manifest；rule ID 绑定精确 rule content、claim、decision、compiler 与 ordinal，再通过 adjudicated packet 和 ingestion provenance 追溯到 evidence span、snapshot、grant 与 attestation。CapabilityModel 与持久化 selection 都包含 `selected_by: current-user`；这是结构标记，真实身份认证仍是 host runtime 的未实现职责。
+
+共享 bounded privacy policy 覆盖 question、CLI outward opaque IDs 与 compiler draft：拒绝完整/部分 evidence、snapshot/span digest、redaction placeholder 和 email-shaped 值；按 UTF-8 byte 门槛处理短 Unicode，并限制最多 12 个待选问题与最多 10,000,000 个片段窗口。所有 public ID 必须使用 record-specific opaque prefix，不能编码 source 内容或 selector。全量测试为 376/376，knowledge/compiler/ingestion/CLI 为 91/91，`compileall`、`git diff --check` 和无 `__pycache__` 检查通过；规格终审 `SPEC PASS`、质量终审 `READY`，Critical/Important/Minor 均为零。
+
+本轮精简/冗余结论：删除唯一确认的 dead `high_impact_conflict` fact 和重复测试分支；共享 privacy policy 消除 question/compiler 两套敏感模式漂移；共享 `_render_section` 消除实际 renderer/provenance renderer 重复。authorization、broker、ingestion、compiler 与各类 safe-file/schema 复验处于不同 trust boundary，保留是必要防御，不应为减少行数而合并。当前没有进一步值得安全删除的生产代码、测试或文档。
 
 ### 产品里程碑
 

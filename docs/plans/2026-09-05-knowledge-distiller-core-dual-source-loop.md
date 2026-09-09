@@ -318,13 +318,13 @@ The first native session target is Codex because it exercises the local CLI-sess
 - Modify: `docs/plans/2026-09-05-knowledge-distiller-core-dual-source-loop.md`
 - Modify: `docs/status/2026-09-05-implementation-status.md`
 
-- [ ] **Step 1: Run the complete suite**
+- [x] **Step 1: Run the complete suite**
 
   Run: `PYTHONDONTWRITEBYTECODE=1 python3 -W error::ResourceWarning -m unittest discover -s tests -v`
 
   Expected: all tests PASS without accessing ungranted sources.
 
-- [ ] **Step 2: Run static and repository checks**
+- [x] **Step 2: Run static and repository checks**
 
   Run: `PYTHONPYCACHEPREFIX=/private/tmp/distil-yourself-pyc-core-loop python3 -m compileall -q knowledge-distiller/scripts`
 
@@ -332,31 +332,42 @@ The first native session target is Codex because it exercises the local CLI-sess
 
   Expected: both exit 0 and no repository `__pycache__` directories exist.
 
-- [ ] **Step 3: Run security and privacy review**
+- [x] **Step 3: Run security and privacy review**
 
   Review grant/attestation binding, broker argv and environment, exact-selector enforcement, principal/revision/range pinning, source-change handling, schema allowlists, raw-content lifetime, diagnostic/telemetry leakage, provenance completeness, and the absence of implicit traversal or mutation. Fix every Critical or Important issue with a failing regression test first.
 
-- [ ] **Step 4: Run explicit simplification and redundancy review**
+- [x] **Step 4: Run explicit simplification and redundancy review**
 
   Answer separately: `是否有可以精简的代码，是否存在冗余、重复或无用的代码/测试/文档？` Inspect especially duplicated safe-file logic, repeated schema validators, adapter-specific code that belongs in the broker, dead compatibility branches, redundant fixtures, and abstractions used by only one call site. Remove only demonstrably redundant code; preserve separate trust boundaries where merging would weaken reviewability or safety.
 
-- [ ] **Step 5: Run independent specification and quality reviews**
+- [x] **Step 5: Run independent specification and quality reviews**
 
   Require both reviews to verify the thin vertical acceptance path using redacted fixtures and to report Critical, Important, Minor, and simplification findings independently. Re-run the full suite after every accepted change.
 
-- [ ] **Step 6: Update status and commit locally**
+- [x] **Step 6: Update status and commit locally**
 
   Record supported exact tuples, fixture coverage, test counts, remaining blocked adapters, deferred milestones, and the simplification verdict. Commit locally on `feat/implement_knowledge_distiller`. Do not push, merge, install, export, publish, or make a wider environment change without separate user approval.
 
+  Result: strict full-suite verification passed 376/376; the focused knowledge/compiler/ingestion/CLI suite passed 91/91; `compileall`, `git diff --check`, and the no-`__pycache__` check passed. Independent specification review returned `SPEC PASS` and independent quality review returned `READY`, both with zero Critical or Important findings. The implementation commit is `c312861`; this completion record is local-only and does not push, merge, install, export, or publish.
+
 ## Acceptance criteria
 
-- One explicitly granted, revision-pinned Lark document can be read through `lark-cli`, normalized, redacted, and persisted without implicit traversal.
-- One explicitly granted, immutable Codex session prefix/range can be read from an exact local descriptor, normalized to the existing canonical event graph, redacted, and persisted without directory enumeration.
-- Every compiled behavioral rule has a complete derivation chain back to an active grant through a redacted native span and confirmed claim/current user decision.
+### Implemented core acceptance
+
+- One dependency-injected synthetic Lark response bound to an explicit grant and pinned revision is normalized, redacted, and persisted without implicit traversal.
+- One dependency-injected synthetic Codex closed prefix bound to an explicit grant and exact descriptor contract is normalized to the existing canonical event graph, redacted, and persisted without directory enumeration.
+- A single synthetic vertical test uses the actual Lark and Codex ingestion outputs, keeps the claim-ineligible Lark span as context/contradiction, compiles only Codex-owner-eligible support, and reaches `EVALUATE`.
+- Every compiled behavioral rule has a persisted derivation chain through generated section, compiler version, confirmed claim/current-user decision, redacted native span, and an unrevoked recorded grant within its derived-processing bound.
 - The system produces one capability model, asks only a critical question when needed, and compiles a draft that passes the existing closed artifact policy.
 - Raw content and source selectors do not appear in transition facts, logs, diagnostics, telemetry, or the generated skill.
 - Unsupported versions, ambiguous ownership/authority, moving sources, prohibited fidelity loss, or schema drift quarantine the whole source/root case and do not advance `INGEST`.
 - Claude Code and Trae remain visibly blocked and scheduled next; export, installation, publication, sealed evaluation, and signed approval remain unimplemented.
+
+### Deferred production acceptance
+
+- A real revision-pinned Lark document read through a production `lark-cli` credential runtime is not wired into standalone `kd.py`.
+- A real immutable Codex session prefix read through a production current-user identity runtime is not wired into standalone `kd.py`.
+- Live revocation/issuer re-authentication, authenticated proof behind the structural `current-user` decision marker, and parser-process sandboxing are not implemented. They remain host/runtime requirements and must not be inferred from core validation.
 
 ## Deferred next milestones
 
