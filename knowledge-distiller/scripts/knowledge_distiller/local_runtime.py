@@ -91,5 +91,5 @@ def decode_local_codex_request(raw: bytes) -> LocalCodexRequest:
             prefix_digest,
             derived_processing_until,
         )
-    except (TypeError, ValueError, RecursionError):
+    except Exception:
         raise LocalRuntimeError("invalid-local-request") from None

@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 import sys
 import unittest
-from dataclasses import FrozenInstanceError
+from dataclasses import MISSING, FrozenInstanceError, fields
 from unittest import mock
 
 
@@ -68,6 +68,26 @@ class LocalRuntimeDecoderTest(unittest.TestCase):
                 prefix_digest=digest(),
                 derived_processing_until=2_000_000_000,
             ),
+        )
+        request_fields = fields(local_runtime.LocalCodexRequest)
+        self.assertEqual(
+            tuple(item.name for item in request_fields),
+            (
+                "schema_version",
+                "transaction_id",
+                "expected_generation_id",
+                "session_path",
+                "project_id",
+                "prefix_length",
+                "prefix_digest",
+                "derived_processing_until",
+            ),
+        )
+        self.assertTrue(
+            all(
+                item.default is MISSING and item.default_factory is MISSING
+                for item in request_fields
+            )
         )
         self.assertNotIn("session-私密.jsonl", repr(request))
         with self.assertRaises(FrozenInstanceError):
@@ -199,15 +219,45 @@ class LocalRuntimeDecoderTest(unittest.TestCase):
             with self.subTest(kind=type(raw).__name__):
                 self.assert_invalid(raw, ("session-私密.jsonl",))
 
-    def test_rejects_string_subclasses_and_collapses_internal_failures(self):
+    def test_maps_reused_json_resource_gates_to_private_local_error(self):
+        depth = adapters.MAX_JSON_NESTING_DEPTH + 1
+        too_deep = (b"[" * depth) + b"0" + (b"]" * depth)
+        value_limit = adapters.MAX_JSON_VALUE_TOKENS
+        too_wide = b"[" + (b"0," * value_limit) + b"0]"
+        for raw in (too_deep, too_wide):
+            with self.subTest(size=len(raw)):
+                self.assertLess(len(raw), local_runtime.MAX_LOCAL_REQUEST_BYTES)
+                self.assert_invalid(raw)
+
+    def test_rejects_decoded_scalar_subclasses(self):
         class StringSubclass(str):
             __slots__ = ()
 
-        data = request_data()
-        data["session_path"] = StringSubclass(data["session_path"])
-        with mock.patch.object(adapters, "decode_event_graph_json", return_value=data):
-            self.assert_invalid(encoded(), (data["session_path"],))
+        class IntSubclass(int):
+            __slots__ = ()
 
+        subclass_fields = (
+            ("schema_version", StringSubclass),
+            ("transaction_id", StringSubclass),
+            ("expected_generation_id", StringSubclass),
+            ("session_path", StringSubclass),
+            ("project_id", StringSubclass),
+            ("prefix_digest", StringSubclass),
+            ("prefix_length", IntSubclass),
+            ("derived_processing_until", IntSubclass),
+        )
+        for field, subclass in subclass_fields:
+            with self.subTest(field=field):
+                data = request_data()
+                data[field] = subclass(data[field])
+                with mock.patch.object(
+                    adapters,
+                    "decode_event_graph_json",
+                    return_value=data,
+                ):
+                    self.assert_invalid(encoded(), (data["session_path"],))
+
+    def test_collapses_internal_validation_failures(self):
         for internal_error in (TypeError("PRIVATE"), ValueError("PRIVATE"), RecursionError("PRIVATE")):
             with self.subTest(kind=type(internal_error).__name__), mock.patch.object(
                 adapters,
@@ -215,6 +265,23 @@ class LocalRuntimeDecoderTest(unittest.TestCase):
                 side_effect=internal_error,
             ):
                 self.assert_invalid(encoded(), ("PRIVATE", "session-私密.jsonl"))
+
+    def test_collapses_unexpected_decoder_exceptions_without_private_details(self):
+        with mock.patch.object(
+            adapters,
+            "decode_event_graph_json",
+            side_effect=RuntimeError("PRIVATE-DECODER-DETAIL"),
+        ):
+            self.assert_invalid(encoded(), ("PRIVATE-DECODER-DETAIL",))
+
+    def test_does_not_swallow_base_exception_control_flow(self):
+        for control_flow in (KeyboardInterrupt(), SystemExit()):
+            with self.subTest(kind=type(control_flow).__name__), mock.patch.object(
+                adapters,
+                "decode_event_graph_json",
+                side_effect=control_flow,
+            ), self.assertRaises(type(control_flow)):
+                local_runtime.decode_local_codex_request(encoded())
 
 
 if __name__ == "__main__":
