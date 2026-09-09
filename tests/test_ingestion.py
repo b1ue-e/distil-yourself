@@ -2,6 +2,7 @@
 
 from dataclasses import asdict, replace
 import hashlib
+import hmac
 import json
 from pathlib import Path
 import sys
@@ -283,7 +284,7 @@ class IngestionTest(unittest.TestCase):
         raw = (ROOT / "tests/fixtures/adapters/codex/0.153.0/"
                "rollout-jsonl-v1/redacted-current.jsonl").read_bytes()
         private_path = "/PRIVATE/session.jsonl"
-        commitment = brokers.session_selector_commitment(private_path)
+        commitment = brokers.session_selector_commitment(private_path, self.key)
         bounds = authorization.SessionRange(0, len(raw) - 1)
         context, grant, attestation = self.authorization(
             commitment, session_range=bounds)
@@ -319,6 +320,7 @@ class IngestionTest(unittest.TestCase):
         persisted = b"".join(
             path.read_bytes() for path in self.root.rglob("*") if path.is_file())
         self.assertNotIn(private_path.encode("utf-8"), persisted)
+        self.assertNotIn(self.key, persisted)
         generation_bytes = b"".join(
             path.read_bytes() for path in generation.rglob("*") if path.is_file())
         self.assertIn(commitment.encode("ascii"), generation_bytes)
@@ -334,7 +336,7 @@ class IngestionTest(unittest.TestCase):
         raw = (ROOT / "tests/fixtures/adapters/codex/0.153.0/"
                "rollout-jsonl-v1/redacted-current.jsonl").read_bytes()
         private_path = "/PRIVATE/session.jsonl"
-        commitment = brokers.session_selector_commitment(private_path)
+        commitment = brokers.session_selector_commitment(private_path, self.key)
         bounds = authorization.SessionRange(0, len(raw) - 1)
         context, grant, attestation = self.authorization(
             commitment, session_range=bounds)
@@ -358,6 +360,168 @@ class IngestionTest(unittest.TestCase):
                 self.ingest(request, acquired)
 
         self.assertEqual(caught.exception.code, "invalid-broker-request")
+        normalize.assert_not_called()
+        self.assertEqual(
+            inspect_task(self.root).generation_id,
+            self.ingest_state.generation_id)
+
+    def test_codex_over_returned_snapshot_is_rejected_before_normalization(self):
+        raw = (ROOT / "tests/fixtures/adapters/codex/0.153.0/"
+               "rollout-jsonl-v1/redacted-current.jsonl").read_bytes()
+        prefix_length = len(raw) - 1
+        bounds = authorization.SessionRange(0, prefix_length - 1)
+        context, grant, attestation = self.authorization(
+            "session.jsonl", session_range=bounds)
+        request = ingestion.IngestionRequest(
+            "codex", "ingest-over-returned-selector",
+            self.ingest_state.generation_id,
+            context, grant, attestation,
+            brokers.SessionRequest(
+                "session.jsonl", "project-1", prefix_length, digest(raw)),
+            "project-1")
+        acquired = self.snapshot(
+            raw, "codex", "0.153.0",
+            native_adapters.CODEX_NATIVE_SCHEMA_DIGEST, "project-1")
+
+        with mock.patch.object(
+                ingestion, "_normalize", wraps=ingestion._normalize) as normalize:
+            with self.assertRaises(ingestion.IngestionError) as caught:
+                self.ingest(request, acquired)
+
+        self.assertEqual(caught.exception.code, "broker-evidence-mismatch")
+        normalize.assert_not_called()
+        self.assertEqual(
+            inspect_task(self.root).generation_id,
+            self.ingest_state.generation_id)
+
+    def test_codex_boolean_prefix_length_is_rejected_before_normalization(self):
+        raw = (ROOT / "tests/fixtures/adapters/codex/0.153.0/"
+               "rollout-jsonl-v1/redacted-current.jsonl").read_bytes()
+        context, grant, attestation = self.authorization(
+            "session.jsonl", session_range=authorization.SessionRange(0, 0))
+        request = ingestion.IngestionRequest(
+            "codex", "ingest-boolean-prefix",
+            self.ingest_state.generation_id,
+            context, grant, attestation,
+            brokers.SessionRequest(
+                "session.jsonl", "project-1", True, digest(raw)),
+            "project-1")
+        acquired = self.snapshot(
+            raw, "codex", "0.153.0",
+            native_adapters.CODEX_NATIVE_SCHEMA_DIGEST, "project-1")
+
+        with mock.patch.object(
+                ingestion, "_normalize", wraps=ingestion._normalize) as normalize:
+            with self.assertRaises(ingestion.IngestionError) as caught:
+                self.ingest(request, acquired)
+
+        self.assertEqual(caught.exception.code, "invalid-broker-request")
+        normalize.assert_not_called()
+        self.assertEqual(
+            inspect_task(self.root).generation_id,
+            self.ingest_state.generation_id)
+
+    def test_codex_integer_subclass_prefix_length_is_rejected_before_normalization(self):
+        class PrefixLength(int):
+            def __eq__(self, other):
+                return True
+
+            def __ne__(self, other):
+                return False
+
+        raw = (ROOT / "tests/fixtures/adapters/codex/0.153.0/"
+               "rollout-jsonl-v1/redacted-current.jsonl").read_bytes()
+        bounds = authorization.SessionRange(0, len(raw) - 1)
+        context, grant, attestation = self.authorization(
+            "session.jsonl", session_range=bounds)
+        acquired = self.snapshot(
+            raw, "codex", "0.153.0",
+            native_adapters.CODEX_NATIVE_SCHEMA_DIGEST, "project-1")
+        request = ingestion.IngestionRequest(
+            "codex", "ingest-subclass-prefix-length",
+            self.ingest_state.generation_id,
+            context, grant, attestation,
+            brokers.SessionRequest(
+                "session.jsonl", "project-1", PrefixLength(1), digest(raw)),
+            "project-1")
+
+        with mock.patch.object(
+                ingestion, "_normalize", wraps=ingestion._normalize) as normalize:
+            with self.assertRaises(ingestion.IngestionError) as caught:
+                self.ingest(request, acquired)
+
+        self.assertEqual(caught.exception.code, "invalid-broker-request")
+        normalize.assert_not_called()
+        self.assertEqual(
+            inspect_task(self.root).generation_id,
+            self.ingest_state.generation_id)
+
+    def test_codex_string_subclass_prefix_digest_is_rejected_before_normalization(self):
+        class PrefixDigest(str):
+            def __eq__(self, other):
+                return True
+
+            def __ne__(self, other):
+                return False
+
+        raw = (ROOT / "tests/fixtures/adapters/codex/0.153.0/"
+               "rollout-jsonl-v1/redacted-current.jsonl").read_bytes()
+        bounds = authorization.SessionRange(0, len(raw) - 1)
+        context, grant, attestation = self.authorization(
+            "session.jsonl", session_range=bounds)
+        acquired = self.snapshot(
+            raw, "codex", "0.153.0",
+            native_adapters.CODEX_NATIVE_SCHEMA_DIGEST, "project-1")
+        request = ingestion.IngestionRequest(
+            "codex", "ingest-subclass-prefix-digest",
+            self.ingest_state.generation_id,
+            context, grant, attestation,
+            brokers.SessionRequest(
+                "session.jsonl", "project-1", len(raw),
+                PrefixDigest("sha256:" + "0" * 64)),
+            "project-1")
+
+        with mock.patch.object(
+                ingestion, "_normalize", wraps=ingestion._normalize) as normalize:
+            with self.assertRaises(ingestion.IngestionError) as caught:
+                self.ingest(request, acquired)
+
+        self.assertEqual(caught.exception.code, "invalid-broker-request")
+        normalize.assert_not_called()
+        self.assertEqual(
+            inspect_task(self.root).generation_id,
+            self.ingest_state.generation_id)
+
+    def test_codex_commitment_tag_cannot_be_used_as_literal_path(self):
+        raw = (ROOT / "tests/fixtures/adapters/codex/0.153.0/"
+               "rollout-jsonl-v1/redacted-current.jsonl").read_bytes()
+        private_path = "/PRIVATE/session.jsonl"
+        commitment = "hmac-sha256:" + hmac.new(
+            self.key,
+            b"local-session-selector\x00" + private_path.encode("utf-8"),
+            hashlib.sha256).hexdigest()
+        bounds = authorization.SessionRange(0, len(raw) - 1)
+        context, grant, attestation = self.authorization(
+            commitment, session_range=bounds)
+        request = ingestion.IngestionRequest(
+            "codex", "ingest-commitment-as-literal",
+            self.ingest_state.generation_id,
+            context, grant, attestation,
+            brokers.SessionRequest(
+                commitment, "project-1", len(raw), digest(raw)),
+            "project-1")
+        acquired = replace(
+            self.snapshot(
+                raw, "codex", "0.153.0",
+                native_adapters.CODEX_NATIVE_SCHEMA_DIGEST, "project-1"),
+            selector_digest=digest(commitment))
+
+        with mock.patch.object(
+                ingestion, "_normalize", wraps=ingestion._normalize) as normalize:
+            with self.assertRaises(ingestion.IngestionError) as caught:
+                self.ingest(request, acquired)
+
+        self.assertEqual(caught.exception.code, "broker-evidence-mismatch")
         normalize.assert_not_called()
         self.assertEqual(
             inspect_task(self.root).generation_id,

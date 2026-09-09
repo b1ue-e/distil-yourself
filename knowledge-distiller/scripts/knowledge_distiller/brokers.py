@@ -19,6 +19,7 @@ evidence only; credentials, locators, and ambient environment are excluded.
 
 from dataclasses import asdict, dataclass, field, fields
 import hashlib
+import hmac
 import re
 import subprocess
 from typing import Callable, Optional, Tuple
@@ -88,6 +89,7 @@ class SessionIdentity:
     product_version: str
     native_schema_digest: str
     expected_owner_uid: Optional[int] = field(default=None, repr=False)
+    selector_key: Optional[bytes] = field(default=None, repr=False)
 
 
 @dataclass(frozen=True)
@@ -147,16 +149,18 @@ def _digest(raw: bytes) -> str:
     return "sha256:" + hashlib.sha256(raw).hexdigest()
 
 
-def session_selector_commitment(path) -> str:
+def session_selector_commitment(path, key=None) -> str:
     if type(path) is not str:
         raise BrokerError("invalid-selector")
     try:
         raw = path.encode("utf-8")
     except UnicodeError:
         raise BrokerError("invalid-selector") from None
-    if not raw or len(raw) > 4096 or b"\x00" in raw:
+    if (not raw or len(raw) > 4096 or b"\x00" in raw
+            or type(key) is not bytes or not 32 <= len(key) <= 64):
         raise BrokerError("invalid-selector")
-    return _digest(b"local-session-selector\x00" + raw)
+    return "hmac-sha256:" + hmac.new(
+        key, b"local-session-selector\x00" + raw, hashlib.sha256).hexdigest()
 
 
 def _evidence(product: str, version, schema_digest, project_id=None) -> NativeEvidence:
@@ -319,9 +323,19 @@ def read_local_session(request: SessionRequest, *, grant: authorization.ContentG
         raise BrokerError("invalid-source-bound")
     if type(request.path) is not str:
         raise BrokerError("invalid-broker-request")
-    selector_matches = (
-        request.path == context.selector
-        or session_selector_commitment(request.path) == context.selector)
+    committed_selector = re.fullmatch(
+        r"hmac-sha256:[0-9a-f]{64}", context.selector) is not None
+    if committed_selector:
+        if (type(identity.selector_key) is not bytes
+                or not 32 <= len(identity.selector_key) <= 64):
+            raise BrokerError("invalid-broker-request")
+        selector_matches = hmac.compare_digest(
+            session_selector_commitment(request.path, identity.selector_key),
+            context.selector)
+    else:
+        if identity.selector_key is not None:
+            raise BrokerError("invalid-broker-request")
+        selector_matches = request.path == context.selector
     if (not selector_matches
             or identity.active_principal != context.active_principal
             or identity.tenant_account != context.tenant_account

@@ -1,6 +1,8 @@
 """Broker policy tests use synthetic sources and injected trusted launchers only."""
 
 from dataclasses import FrozenInstanceError, asdict, replace
+import hashlib
+import hmac
 import importlib
 import os
 from pathlib import Path
@@ -243,6 +245,7 @@ class BrokerTest(unittest.TestCase):
             "synthetic-1", digest(b"synthetic-schema"))
 
         self.assertIsNone(identity.expected_owner_uid)
+        self.assertIsNone(identity.selector_key)
 
     def test_local_expected_owner_uid_is_trusted_identity_not_request_data(self):
         path, context, request, identity = self.local()
@@ -272,41 +275,91 @@ class BrokerTest(unittest.TestCase):
 
     def test_local_path_commitment_binds_exact_path_without_persisting_it(self):
         path, context, request, identity = self.local()
-        commitment = brokers.session_selector_commitment(str(path))
+        key = b"k" * 32
+        commitment = brokers.session_selector_commitment(str(path), key)
         committed_context = replace(context, selector=commitment)
         result = self.read_session(
-            committed_context, request, identity,
+            committed_context, request, replace(identity, selector_key=key),
             records=self.records(committed_context))
         self.assertEqual(result.raw, b"abc")
         self.assertEqual(result.selector_digest, digest(commitment.encode("utf-8")))
         self.assertNotIn(str(path), commitment)
 
-        substituted = replace(request, path=str(path.parent / "other.jsonl"))
         with mock.patch.object(source_io, "read_source") as blocked:
-            self.reject(
-                lambda: self.read_session(
-                    committed_context, substituted, identity,
-                    records=self.records(committed_context)),
-                "authorization-context-mismatch")
+            for substituted_path in (str(path.parent / "other.jsonl"), commitment):
+                substituted = replace(request, path=substituted_path)
+                self.reject(
+                    lambda substituted=substituted: self.read_session(
+                        committed_context, substituted,
+                        replace(identity, selector_key=key),
+                        records=self.records(committed_context)),
+                    "authorization-context-mismatch")
             blocked.assert_not_called()
 
     def test_session_selector_commitment_validates_exact_utf8_path(self):
-        raw = b"local-session-selector\x00/private/session.jsonl"
+        key = b"k" * 32
+        path = "/private/session.jsonl"
+        expected = "hmac-sha256:" + hmac.new(
+            key, b"local-session-selector\x00" + path.encode("utf-8"),
+            hashlib.sha256).hexdigest()
         self.assertEqual(
-            brokers.session_selector_commitment("/private/session.jsonl"),
-            digest(raw))
+            brokers.session_selector_commitment(path, key),
+            expected)
         unicode_path = "Hamüss/session.jsonl"
         self.assertEqual(
-            brokers.session_selector_commitment(unicode_path),
-            digest(b"local-session-selector\x00" + unicode_path.encode("utf-8")))
+            brokers.session_selector_commitment(unicode_path, key),
+            "hmac-sha256:" + hmac.new(
+                key, b"local-session-selector\x00" + unicode_path.encode("utf-8"),
+                hashlib.sha256).hexdigest())
         self.assertRegex(
-            brokers.session_selector_commitment("a" * 4096),
-            r"^sha256:[0-9a-f]{64}$")
+            brokers.session_selector_commitment("a" * 4096, key),
+            r"^hmac-sha256:[0-9a-f]{64}$")
         for path in (None, True, "", "a" * 4097, "private\x00session", "\ud800"):
             with self.subTest(path=repr(path)):
                 self.reject(
-                    lambda path=path: brokers.session_selector_commitment(path),
+                    lambda path=path: brokers.session_selector_commitment(path, key),
                     "invalid-selector")
+
+    def test_session_selector_commitment_rejects_missing_or_invalid_key(self):
+        class KeySubclass(bytes):
+            pass
+
+        path = "/private/session.jsonl"
+        self.reject(
+            lambda: brokers.session_selector_commitment(path),
+            "invalid-selector")
+        for key in (None, True, b"k" * 31, b"k" * 65,
+                    bytearray(b"k" * 32), KeySubclass(b"k" * 32)):
+            with self.subTest(key_type=type(key).__name__, key_length=len(key) if hasattr(key, "__len__") else None):
+                self.reject(
+                    lambda key=key: brokers.session_selector_commitment(path, key),
+                    "invalid-selector")
+
+    def test_local_commitment_key_mode_is_unambiguous_before_source_io(self):
+        class KeySubclass(bytes):
+            pass
+
+        path, context, request, identity = self.local()
+        key = b"k" * 32
+        commitment = "hmac-sha256:" + hmac.new(
+            key, b"local-session-selector\x00" + str(path).encode("utf-8"),
+            hashlib.sha256).hexdigest()
+        committed_context = replace(context, selector=commitment)
+        records = self.records(committed_context)
+        with mock.patch.object(source_io, "read_source") as blocked:
+            for selector_key in (None, True, b"short", bytearray(key), KeySubclass(key)):
+                with self.subTest(key_type=type(selector_key).__name__):
+                    self.reject(
+                        lambda selector_key=selector_key: self.read_session(
+                            committed_context, request,
+                            replace(identity, selector_key=selector_key),
+                            records=records),
+                        "invalid-broker-request")
+            self.reject(
+                lambda: self.read_session(
+                    context, request, replace(identity, selector_key=key)),
+                "invalid-broker-request")
+            blocked.assert_not_called()
 
     def test_local_grant_context_project_account_and_bounds_before_open(self):
         path, context, request, identity = self.local()

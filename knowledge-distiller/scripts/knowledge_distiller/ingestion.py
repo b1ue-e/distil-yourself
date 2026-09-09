@@ -2,7 +2,9 @@
 
 from dataclasses import asdict, dataclass, fields
 import hashlib
+import hmac
 from pathlib import Path
+import re
 from typing import Any, Callable
 
 from . import adapters, authorization, brokers, native_adapters, redaction, sources
@@ -236,7 +238,7 @@ def _snapshot_manifest(snapshot, payload, kind, context):
     return record, payload_dict, manifest
 
 
-def _validated_snapshot(snapshot, request):
+def _validated_snapshot(snapshot, request, selector_key):
     snapshot = _closed(snapshot, brokers.BrokerSnapshot, "broker-response-invalid")
     owner = _closed(snapshot.owner, sources.OwnerBinding, "broker-response-invalid")
     evidence = _closed(snapshot.evidence, brokers.NativeEvidence, "broker-response-invalid")
@@ -269,16 +271,30 @@ def _validated_snapshot(snapshot, request):
     else:
         native_request = request.native_request
         source_range = context.session_range
-        if type(native_request.path) is not str:
+        if (type(native_request.path) is not str
+                or type(native_request.prefix_length) is not int
+                or not 0 < native_request.prefix_length <= adapters.MAX_GRAPH_BYTES
+                or type(native_request.prefix_digest) is not str
+                or re.fullmatch(
+                    r"sha256:[0-9a-f]{64}", native_request.prefix_digest) is None):
             _fail("invalid-broker-request")
-        selector_matches = (
-            native_request.path == context.selector
-            or brokers.session_selector_commitment(native_request.path)
-            == context.selector)
+        committed_selector = re.fullmatch(
+            r"hmac-sha256:[0-9a-f]{64}", context.selector) is not None
+        if committed_selector:
+            try:
+                expected_selector = brokers.session_selector_commitment(
+                    native_request.path, selector_key)
+            except brokers.BrokerError:
+                _fail("invalid-broker-request")
+            selector_matches = hmac.compare_digest(
+                expected_selector, context.selector)
+        else:
+            selector_matches = native_request.path == context.selector
         if (not selector_matches or context.revision is not None
                 or source_range is None or source_range.start != 0
                 or native_request.prefix_length != source_range.end + 1
-                or native_request.prefix_digest != snapshot.raw_digest):
+                or native_request.prefix_digest != snapshot.raw_digest
+                or snapshot.source_byte_count != native_request.prefix_length):
             _fail("broker-evidence-mismatch")
     return brokers.BrokerSnapshot(
         snapshot.raw, sources.OwnerBinding(owner.kind, owner.id, owner.verification),
@@ -384,7 +400,7 @@ def ingest_source(task_root: Path, request: IngestionRequest, *, acquire: Acquis
                         request.authorization_context))
             except Exception:
                 _fail("acquisition-failed")
-            snapshot = _validated_snapshot(snapshot, request)
+            snapshot = _validated_snapshot(snapshot, request, redaction_key)
             trust = _trust(request, grant, attestation)
             record, payload, manifest, spans = _normalize(
                 request, snapshot, trust, redaction_key)
