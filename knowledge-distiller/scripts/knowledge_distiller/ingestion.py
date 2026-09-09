@@ -269,7 +269,11 @@ def _validated_snapshot(snapshot, request):
     else:
         native_request = request.native_request
         source_range = context.session_range
-        if (native_request.path != context.selector or context.revision is not None
+        selector_matches = (
+            native_request.path == context.selector
+            or brokers.session_selector_commitment(native_request.path)
+            == context.selector)
+        if (not selector_matches or context.revision is not None
                 or source_range is None or source_range.start != 0
                 or native_request.prefix_length != source_range.end + 1
                 or native_request.prefix_digest != snapshot.raw_digest):

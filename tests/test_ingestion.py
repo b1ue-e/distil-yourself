@@ -1,6 +1,6 @@
 """End-to-end synthetic tests for per-source and dual-source atomic ingestion."""
 
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import hashlib
 import json
 from pathlib import Path
@@ -278,6 +278,48 @@ class IngestionTest(unittest.TestCase):
         self.assertEqual(
             [record.payload["kind"] for record in Journal(self.root / "event-log.frames").scan().records]
             .count("commit"), 4)
+
+    def test_codex_path_commitment_is_rechecked_and_hides_filesystem_path(self):
+        raw = (ROOT / "tests/fixtures/adapters/codex/0.153.0/"
+               "rollout-jsonl-v1/redacted-current.jsonl").read_bytes()
+        private_path = "/PRIVATE/session.jsonl"
+        commitment = brokers.session_selector_commitment(private_path)
+        bounds = authorization.SessionRange(0, len(raw) - 1)
+        context, grant, attestation = self.authorization(
+            commitment, session_range=bounds)
+        request = ingestion.IngestionRequest(
+            "codex", "ingest-committed-selector",
+            self.ingest_state.generation_id,
+            context, grant, attestation,
+            brokers.SessionRequest(
+                private_path, "project-1", len(raw), digest(raw)),
+            "project-1")
+        acquired = replace(
+            self.snapshot(
+                raw, "codex", "0.153.0",
+                native_adapters.CODEX_NATIVE_SCHEMA_DIGEST, "project-1"),
+            selector_digest=digest(commitment))
+
+        changed_request = replace(
+            request,
+            transaction_id="ingest-substituted-selector",
+            native_request=replace(
+                request.native_request, path="/PRIVATE/other.jsonl"))
+        with self.assertRaises(ingestion.IngestionError) as caught:
+            self.ingest(changed_request, acquired)
+        self.assertEqual(caught.exception.code, "broker-evidence-mismatch")
+        self.assertEqual(
+            inspect_task(self.root).generation_id,
+            self.ingest_state.generation_id)
+
+        result, calls = self.ingest(request, acquired)
+
+        self.assertEqual(calls, ["codex"])
+        generation = self.root / "generations" / result.generation_id
+        persisted = b"".join(
+            path.read_bytes() for path in generation.rglob("*") if path.is_file())
+        self.assertNotIn(private_path.encode("utf-8"), persisted)
+        self.assertIn(commitment.encode("ascii"), persisted)
 
     def test_actual_dual_ingestion_outputs_compile_to_closed_draft(self):
         processing_until = 4_102_444_800

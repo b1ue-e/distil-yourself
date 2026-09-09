@@ -12,6 +12,7 @@ from unittest import mock
 from tests.test_authorization import grant_data, reseal
 from tests.test_source_io import digest
 from knowledge_distiller import authorization as auth
+from knowledge_distiller import source_io
 
 try:
     brokers = importlib.import_module("knowledge_distiller.brokers")
@@ -212,7 +213,7 @@ class BrokerTest(unittest.TestCase):
         context = replace(self.context, selector=str(path), revision=None, session_range=auth.SessionRange(0, 2))
         request = brokers.SessionRequest(str(path), "project-1", 3, digest(b"abc"))
         identity = brokers.SessionIdentity("owner-1", "tenant-1", "project-1", "collaborator-1",
-                                           "synthetic-1", digest(b"synthetic-schema"))
+                                           "synthetic-1", digest(b"synthetic-schema"), os.geteuid())
         return path, context, request, identity
 
     def read_session(self, context, request, identity, records=None):
@@ -235,6 +236,73 @@ class BrokerTest(unittest.TestCase):
         self.assertEqual(self.read_session(context, request, identity), result)
         path.write_bytes(b"bacDEF")
         self.reject(lambda: self.read_session(context, request, identity), "input-changed")
+
+    def test_six_argument_session_identity_remains_compatible(self):
+        identity = brokers.SessionIdentity(
+            "owner-1", "tenant-1", "project-1", "collaborator-1",
+            "synthetic-1", digest(b"synthetic-schema"))
+
+        self.assertIsNone(identity.expected_owner_uid)
+
+    def test_local_expected_owner_uid_is_trusted_identity_not_request_data(self):
+        path, context, request, identity = self.local()
+        with mock.patch.object(source_io, "read_source", return_value=b"abc") as read:
+            result = self.read_session(context, request, identity)
+        read.assert_called_once_with(
+            request.path,
+            max_bytes=brokers.MAX_GRAPH_BYTES,
+            prefix_length=request.prefix_length,
+            expected_digest=request.prefix_digest,
+            expected_owner_uid=os.geteuid(),
+        )
+        self.assertEqual(result.raw, b"abc")
+
+        with mock.patch.object(source_io, "read_source") as blocked:
+            self.reject(
+                lambda: self.read_session(
+                    context, request,
+                    replace(identity, expected_owner_uid=True)),
+                "invalid-broker-request")
+            self.reject(
+                lambda: self.read_session(
+                    context, request,
+                    replace(identity, expected_owner_uid=-1)),
+                "invalid-broker-request")
+            blocked.assert_not_called()
+
+    def test_local_path_commitment_binds_exact_path_without_persisting_it(self):
+        path, context, request, identity = self.local()
+        commitment = brokers.session_selector_commitment(str(path))
+        committed_context = replace(context, selector=commitment)
+        result = self.read_session(
+            committed_context, request, identity,
+            records=self.records(committed_context))
+        self.assertEqual(result.raw, b"abc")
+        self.assertEqual(result.selector_digest, digest(commitment.encode("utf-8")))
+        self.assertNotIn(str(path), commitment)
+
+        substituted = replace(request, path=str(path.parent / "other.jsonl"))
+        with mock.patch.object(source_io, "read_source") as blocked:
+            self.reject(
+                lambda: self.read_session(
+                    committed_context, substituted, identity,
+                    records=self.records(committed_context)),
+                "authorization-context-mismatch")
+            blocked.assert_not_called()
+
+    def test_session_selector_commitment_validates_exact_utf8_path(self):
+        raw = b"local-session-selector\x00/private/session.jsonl"
+        self.assertEqual(
+            brokers.session_selector_commitment("/private/session.jsonl"),
+            digest(raw))
+        self.assertRegex(
+            brokers.session_selector_commitment("a" * 4096),
+            r"^sha256:[0-9a-f]{64}$")
+        for path in (None, True, "", "a" * 4097, "private\x00session", "\ud800"):
+            with self.subTest(path=repr(path)):
+                self.reject(
+                    lambda path=path: brokers.session_selector_commitment(path),
+                    "invalid-selector")
 
     def test_local_grant_context_project_account_and_bounds_before_open(self):
         path, context, request, identity = self.local()

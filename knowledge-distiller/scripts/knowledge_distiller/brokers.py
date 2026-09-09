@@ -87,6 +87,7 @@ class SessionIdentity:
     content_owner: str
     product_version: str
     native_schema_digest: str
+    expected_owner_uid: Optional[int] = field(default=None, repr=False)
 
 
 @dataclass(frozen=True)
@@ -144,6 +145,18 @@ def _digest_value(value, code: str) -> None:
 
 def _digest(raw: bytes) -> str:
     return "sha256:" + hashlib.sha256(raw).hexdigest()
+
+
+def session_selector_commitment(path) -> str:
+    if type(path) is not str:
+        raise BrokerError("invalid-selector")
+    try:
+        raw = path.encode("utf-8")
+    except UnicodeError:
+        raise BrokerError("invalid-selector") from None
+    if not raw or len(raw) > 4096 or b"\x00" in raw:
+        raise BrokerError("invalid-selector")
+    return _digest(b"local-session-selector\x00" + raw)
 
 
 def _evidence(product: str, version, schema_digest, project_id=None) -> NativeEvidence:
@@ -294,13 +307,22 @@ def read_local_session(request: SessionRequest, *, grant: authorization.ContentG
     for name in ("active_principal", "tenant_account", "content_owner", "project_id"):
         _identifier(getattr(identity, name), "invalid-broker-request")
     _identifier(request.project_id, "invalid-broker-request")
+    if (identity.expected_owner_uid is not None
+            and (type(identity.expected_owner_uid) is not int
+                 or not 0 <= identity.expected_owner_uid <= 9223372036854775807)):
+        raise BrokerError("invalid-broker-request")
     _digest_value(request.prefix_digest, "invalid-source-bound")
     if (context.revision is not None or context.session_range is None
             or context.session_range.start != 0 or type(request.prefix_length) is not int
             or request.prefix_length != context.session_range.end + 1
             or not 0 < request.prefix_length <= MAX_GRAPH_BYTES):
         raise BrokerError("invalid-source-bound")
-    if (type(request.path) is not str or request.path != context.selector
+    if type(request.path) is not str:
+        raise BrokerError("invalid-broker-request")
+    selector_matches = (
+        request.path == context.selector
+        or session_selector_commitment(request.path) == context.selector)
+    if (not selector_matches
             or identity.active_principal != context.active_principal
             or identity.tenant_account != context.tenant_account
             or identity.content_owner != context.content_owner or identity.project_id != request.project_id):
@@ -308,7 +330,9 @@ def read_local_session(request: SessionRequest, *, grant: authorization.ContentG
     evidence = _evidence("codex", identity.product_version, identity.native_schema_digest, identity.project_id)
     try:
         raw = source_io.read_source(request.path, max_bytes=MAX_GRAPH_BYTES,
-                                    prefix_length=request.prefix_length, expected_digest=request.prefix_digest)
+                                    prefix_length=request.prefix_length,
+                                    expected_digest=request.prefix_digest,
+                                    expected_owner_uid=identity.expected_owner_uid)
     except source_io.SourceIOError as error:
         raise BrokerError(error.code) from None
     return _snapshot(raw, context, evidence)
