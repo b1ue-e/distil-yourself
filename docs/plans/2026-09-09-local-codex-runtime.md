@@ -48,7 +48,7 @@ It has no identity, UID, issuer, owner, grant, attestation, product, adapter, sc
 - Modify: `knowledge-distiller/scripts/knowledge_distiller/source_io.py` (`read_source` argument validation and first/final `fstat` policy)
 - Modify: `tests/test_source_io.py` (`SourceIOTest`)
 
-- [ ] **Step 1: Write failing policy tests**
+- [x] **Step 1: Write failing policy tests**
 
 Add these methods to `SourceIOTest`; use its existing `self.path`, `self.read`, `self.reject`, and `self.metadata` helpers:
 
@@ -90,13 +90,13 @@ def test_owner_change_during_read_is_rejected(self):
             "input-changed")
 ```
 
-- [ ] **Step 2: Run the focused test red**
+- [x] **Step 2: Run the focused test red**
 
 Run: `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest tests.test_source_io.SourceIOTest.test_owner_and_owner_only_policy_use_open_descriptor_metadata tests.test_source_io.SourceIOTest.test_owner_policy_arguments_are_validated_before_open tests.test_source_io.SourceIOTest.test_owner_change_during_read_is_rejected -v`
 
 Expected: FAIL because `read_source` does not accept the two policy arguments.
 
-- [ ] **Step 3: Implement the minimal shared policy**
+- [x] **Step 3: Implement the minimal shared policy**
 
 Change the signature and validation at the start of `read_source` to:
 
@@ -136,13 +136,13 @@ Replace the existing `identity_fields` assignment with:
 
 Update the module docstring to say that callers may opt into same-descriptor owner and owner-only mode policy; ordinary event-graph callers still have no owner/mode restriction. Do not call `stat`, `lstat`, `Path.stat`, or `_open_source` a second time. Do not change behavior for callers that omit both new arguments.
 
-- [ ] **Step 4: Run source-I/O regressions green**
+- [x] **Step 4: Run source-I/O regressions green**
 
 Run: `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest tests.test_source_io -v`
 
 Expected: PASS, including the existing single-target-open, prefix-confirmation, append-exclusion, moving-file, descriptor-cleanup, symlink, hardlink, sparse, and special-file tests.
 
-- [ ] **Step 5: Commit the descriptor policy**
+- [x] **Step 5: Commit the descriptor policy**
 
 ```bash
 git add knowledge-distiller/scripts/knowledge_distiller/source_io.py tests/test_source_io.py
