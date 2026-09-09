@@ -158,7 +158,7 @@ git commit -m "feat: bind safe reads to file ownership"
 - Modify: `tests/test_brokers.py` (all `SessionIdentity` construction and local broker policy)
 - Modify: `tests/test_ingestion.py` (literal-selector regression and committed-selector acceptance)
 
-- [ ] **Step 1: Write the failing broker ownership test**
+- [x] **Step 1: Write the failing broker ownership test**
 
 Update the `local()` helper to construct the expanded trusted identity:
 
@@ -199,10 +199,12 @@ def test_local_expected_owner_uid_is_trusted_identity_not_request_data(self):
 
 def test_local_path_commitment_binds_exact_path_without_persisting_it(self):
     path, context, request, identity = self.local()
-    commitment = brokers.session_selector_commitment(str(path))
+    selector_key = b"k" * 32
+    commitment = brokers.session_selector_commitment(str(path), selector_key)
     committed_context = replace(context, selector=commitment)
     result = self.read_session(
-        committed_context, request, identity,
+        committed_context, request,
+        replace(identity, selector_key=selector_key),
         records=self.records(committed_context))
     self.assertEqual(result.raw, b"abc")
     self.assertEqual(result.selector_digest, digest(commitment.encode("utf-8")))
@@ -212,7 +214,8 @@ def test_local_path_commitment_binds_exact_path_without_persisting_it(self):
     with mock.patch.object(source_io, "read_source") as blocked:
         self.reject(
             lambda: self.read_session(
-                committed_context, substituted, identity,
+                committed_context, substituted,
+                replace(identity, selector_key=selector_key),
                 records=self.records(committed_context)),
             "authorization-context-mismatch")
         blocked.assert_not_called()
@@ -227,7 +230,7 @@ def test_codex_path_commitment_is_rechecked_and_hides_filesystem_path(self):
     raw = (ROOT / "tests/fixtures/adapters/codex/0.153.0/"
            "rollout-jsonl-v1/redacted-current.jsonl").read_bytes()
     private_path = "/PRIVATE/session.jsonl"
-    commitment = brokers.session_selector_commitment(private_path)
+    commitment = brokers.session_selector_commitment(private_path, self.key)
     bounds = authorization.SessionRange(0, len(raw) - 1)
     context, grant, attestation = self.authorization(
         commitment, session_range=bounds)
@@ -263,13 +266,13 @@ def test_codex_path_commitment_is_rechecked_and_hides_filesystem_path(self):
     self.assertIn(commitment.encode("ascii"), persisted)
 ```
 
-- [ ] **Step 2: Run the focused broker test red**
+- [x] **Step 2: Run the focused broker test red**
 
 Run: `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest tests.test_brokers.BrokerTest.test_local_expected_owner_uid_is_trusted_identity_not_request_data -v`
 
 Expected: FAIL because `SessionIdentity` lacks `expected_owner_uid` and the commitment helper does not exist.
 
-- [ ] **Step 3: Add and validate the trusted UID**
+- [x] **Step 3: Add and validate the trusted UID**
 
 Replace `SessionIdentity` with:
 
@@ -283,24 +286,30 @@ class SessionIdentity:
     product_version: str
     native_schema_digest: str
     expected_owner_uid: Optional[int] = field(default=None, repr=False)
+    selector_key: Optional[bytes] = field(default=None, repr=False)
 ```
 
-The existing `Optional` import in `brokers.py` supports this annotation. The default preserves source compatibility for injected hosts; the standalone runtime always supplies the current effective UID.
+The existing `Optional` import in `brokers.py` supports these annotations. Both defaults preserve six- and seven-argument source compatibility for injected hosts; the standalone runtime always supplies the current effective UID and supplies the in-memory selector key only in committed mode. Neither secret-bearing field may be serialized or persisted.
 
 Add this helper next to the existing `_digest` helper:
 
 ```python
-def session_selector_commitment(path) -> str:
+def session_selector_commitment(path, key=None) -> str:
     if type(path) is not str:
         raise BrokerError("invalid-selector")
     try:
         raw = path.encode("utf-8")
     except UnicodeError:
         raise BrokerError("invalid-selector") from None
-    if not raw or len(raw) > 4096 or b"\x00" in raw:
+    if (not raw or len(raw) > 4096 or b"\x00" in raw
+            or type(key) is not bytes or not 32 <= len(key) <= 64):
         raise BrokerError("invalid-selector")
-    return _digest(b"local-session-selector\x00" + raw)
+    return "hmac-sha256:" + hmac.new(
+        key, b"local-session-selector\x00" + raw,
+        hashlib.sha256).hexdigest()
 ```
+
+Add `import hmac` next to `hashlib`. Exact `hmac-sha256:<64 lowercase hex>` syntax selects committed mode; that tagged namespace is reserved and cannot also be interpreted as a literal relative filename.
 
 After the identity identifier loop in `read_local_session`, add:
 
@@ -316,9 +325,20 @@ Replace the entire broker path/identity context-mismatch `if` block with:
 ```python
     if type(request.path) is not str:
         raise BrokerError("invalid-broker-request")
-    selector_matches = (
-        request.path == context.selector
-        or session_selector_commitment(request.path) == context.selector)
+    committed_selector = re.fullmatch(
+        r"hmac-sha256:[0-9a-f]{64}", context.selector) is not None
+    if committed_selector:
+        if (type(identity.selector_key) is not bytes
+                or not 32 <= len(identity.selector_key) <= 64):
+            raise BrokerError("invalid-broker-request")
+        selector_matches = hmac.compare_digest(
+            session_selector_commitment(
+                request.path, identity.selector_key),
+            context.selector)
+    else:
+        if identity.selector_key is not None:
+            raise BrokerError("invalid-broker-request")
+        selector_matches = request.path == context.selector
     if (not selector_matches
             or identity.active_principal != context.active_principal
             or identity.tenant_account != context.tenant_account
@@ -341,34 +361,53 @@ Then change the one `source_io.read_source` call to:
 
 The request and authorization context receive no UID field.
 
-In `ingestion._validated_snapshot`, replace the Codex `native_request.path != context.selector` condition with the same backward-compatible exact binding:
+In `ingestion._validated_snapshot`, accept `selector_key`, reject non-built-in path/length/digest scalar types, require the returned byte count to equal the authorized prefix, and make the same tagged-mode decision independently:
 
 ```python
-        selector_matches = (
-            native_request.path == context.selector
-            or brokers.session_selector_commitment(native_request.path)
-            == context.selector)
+        if (type(native_request.path) is not str
+                or type(native_request.prefix_length) is not int
+                or not 0 < native_request.prefix_length <= adapters.MAX_GRAPH_BYTES
+                or type(native_request.prefix_digest) is not str
+                or re.fullmatch(
+                    r"sha256:[0-9a-f]{64}",
+                    native_request.prefix_digest) is None):
+            _fail("invalid-broker-request")
+        committed_selector = re.fullmatch(
+            r"hmac-sha256:[0-9a-f]{64}", context.selector) is not None
+        if committed_selector:
+            try:
+                expected_selector = brokers.session_selector_commitment(
+                    native_request.path, selector_key)
+            except brokers.BrokerError:
+                _fail("invalid-broker-request")
+            selector_matches = hmac.compare_digest(
+                expected_selector, context.selector)
+        else:
+            selector_matches = native_request.path == context.selector
         if (not selector_matches or context.revision is not None
                 or source_range is None or source_range.start != 0
                 or native_request.prefix_length != source_range.end + 1
-                or native_request.prefix_digest != snapshot.raw_digest):
+                or native_request.prefix_digest != snapshot.raw_digest
+                or snapshot.source_byte_count != native_request.prefix_length):
             _fail("broker-evidence-mismatch")
 ```
 
-The literal path branch preserves the existing injected API. The commitment branch is used only by the standalone runtime; it lets the authorization records cryptographically bind one exact path while persisting only an opaque digest.
+Pass the already-validated `redaction_key` from `ingest_source` into `_validated_snapshot` as `selector_key`. Add `hmac` and `re` imports in `ingestion.py`. The literal path branch preserves the existing injected API. The keyed commitment branch is used only by the standalone runtime; it cryptographically binds one exact path without leaving an offline path-guessing oracle in persisted authorization records.
 
-- [ ] **Step 4: Run broker and ingestion regressions green**
+- [x] **Step 4: Run broker and ingestion regressions green**
 
 Run: `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest tests.test_brokers tests.test_ingestion -v`
 
 Expected: PASS after adding explicit UID coverage and an ingestion regression for the committed selector. Existing six-argument injected-runtime `SessionIdentity` construction and literal selectors remain green through the optional default. No real session file is read.
 
-- [ ] **Step 5: Commit the broker binding**
+- [x] **Step 5: Commit the broker binding**
 
 ```bash
-git add knowledge-distiller/scripts/knowledge_distiller/brokers.py tests/test_brokers.py tests/test_ingestion.py
+git add knowledge-distiller/scripts/knowledge_distiller/brokers.py knowledge-distiller/scripts/knowledge_distiller/ingestion.py tests/test_brokers.py tests/test_ingestion.py
 git commit -m "feat: enforce Codex session owner identity"
 ```
+
+Completion result: implementation and review fixes are in `0b3ea4a`, `b830331`, and `2c028bc`. TDD regressions cover over-returned bytes, bool/scalar-subclass bypasses, tagged-selector literal substitution, invalid/missing keys, UTF-8 commitments, and full-task persistence privacy. Specification review passed; quality/security review returned `READY` with no Critical or Important findings. The focused broker/ingestion/source-I/O set passed 59/59 and the full repository passed 392/392. Production review found no redundant or dead logic; the broker and ingestion checks remain intentionally independent.
 
 ### Task 3: Strictly decode the standalone private request
 
@@ -605,7 +644,8 @@ Add these methods to `LocalRuntimeTest`:
 def test_materialized_request_binds_exact_local_identity_scope_and_tuple(self):
     request = local_runtime.decode_local_codex_request(encoded())
     materialized = local_runtime.materialize_local_codex_request(
-        Path("task-root"), request, effective_uid=501, now=1000)
+        Path("task-root"), request, selector_key=b"k" * 32,
+        effective_uid=501, now=1000)
     core = materialized.request
     identity = materialized.identity
 
@@ -617,6 +657,8 @@ def test_materialized_request_binds_exact_local_identity_scope_and_tuple(self):
         request.prefix_length, request.prefix_digest))
     self.assertEqual(core.native_locator_id, request.project_id)
     self.assertEqual(identity.expected_owner_uid, 501)
+    self.assertEqual(identity.selector_key, b"k" * 32)
+    self.assertNotIn((b"k" * 32).decode("ascii"), repr(identity))
     self.assertEqual(identity.product_version,
                      native_adapters.CODEX_ROLLOUT_ADAPTER.product_version)
     self.assertEqual(identity.native_schema_digest,
@@ -629,7 +671,8 @@ def test_materialized_request_binds_exact_local_identity_scope_and_tuple(self):
     self.assertNotIn("task-root", core.authorization_context.task_id)
     self.assertEqual(
         core.authorization_context.selector,
-        brokers.session_selector_commitment(request.session_path))
+        brokers.session_selector_commitment(
+            request.session_path, b"k" * 32))
     self.assertNotIn(request.session_path,
                      json.dumps(core.content_grant, sort_keys=True))
     self.assertNotIn(request.session_path,
@@ -764,7 +807,8 @@ def _runtime_values(effective_uid, now, derived_processing_until):
 
 def materialize_local_codex_request(
         task_root: Path, request: LocalCodexRequest, *,
-        effective_uid: int, now: int) -> MaterializedCodexRequest:
+        selector_key: bytes, effective_uid: int,
+        now: int) -> MaterializedCodexRequest:
     if type(request) is not LocalCodexRequest:
         _fail("invalid-local-request")
     _runtime_values(effective_uid, now, request.derived_processing_until)
@@ -783,7 +827,8 @@ def materialize_local_codex_request(
         task_id=task_id,
         active_principal=active_principal,
         tenant_account=tenant_account,
-        selector=brokers.session_selector_commitment(request.session_path),
+        selector=brokers.session_selector_commitment(
+            request.session_path, selector_key),
         purpose=PURPOSE,
         revision=None,
         session_range=bounds,
@@ -846,6 +891,7 @@ def materialize_local_codex_request(
         native_adapters.CODEX_ROLLOUT_ADAPTER.product_version,
         native_adapters.CODEX_NATIVE_SCHEMA_DIGEST,
         effective_uid,
+        selector_key,
     )
     core_request = ingestion.IngestionRequest(
         "codex", request.transaction_id, request.expected_generation_id,
@@ -890,7 +936,8 @@ def _ingest_codex_session(
     _runtime_values(uid, now, decoded.derived_processing_until)
     key = _read_redaction_key(redaction_key_file, uid)
     materialized = materialize_local_codex_request(
-        Path(task_root), decoded, effective_uid=uid, now=now)
+        Path(task_root), decoded, selector_key=key,
+        effective_uid=uid, now=now)
 
     def acquire_codex(native_request, grant, attestation, context):
         return brokers.read_local_session(
