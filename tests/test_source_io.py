@@ -59,7 +59,7 @@ class SourceIOTest(unittest.TestCase):
 
     def test_owner_and_owner_only_policy_use_open_descriptor_metadata(self):
         self.path.chmod(0o600)
-        current_uid = os.getuid()
+        current_uid = os.geteuid()
         self.assertEqual(self.read(expected_owner_uid=current_uid, owner_only=True), b"abcdef")
         self.reject(lambda: self.read(expected_owner_uid=current_uid + 1), "source-owner-mismatch")
         self.path.chmod(0o640)
@@ -79,7 +79,7 @@ class SourceIOTest(unittest.TestCase):
             opened.assert_not_called()
 
     def test_owner_change_during_read_is_rejected(self):
-        current_uid = os.getuid()
+        current_uid = os.geteuid()
         before = self.metadata(st_uid=current_uid, st_mode=stat.S_IFREG | 0o600)
         after = self.metadata(st_uid=current_uid + 1, st_mode=stat.S_IFREG | 0o600)
         with mock.patch.object(os, "fstat", side_effect=(before, after)):
