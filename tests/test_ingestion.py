@@ -13,10 +13,13 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "knowledge-distiller" / "scripts"))
 
-from knowledge_distiller import authorization, brokers, ingestion, native_adapters, sources
+from knowledge_distiller import (
+    authorization, brokers, compiler, ingestion, native_adapters, sources,
+)
 from knowledge_distiller.journal import Journal, canonical_json
 from knowledge_distiller.persistence import TaskCoordinator, create_task, inspect_task, recover_task
 from knowledge_distiller.state import Event, Phase, TransitionFacts
+from tests.test_knowledge import packet
 
 
 def digest(value):
@@ -40,7 +43,15 @@ class IngestionTest(unittest.TestCase):
         self.key = b"k" * 32
         self.owner = digest("owner")
 
-    def authorization(self, selector, revision=None, session_range=None, revoked=False):
+    def authorization(
+        self,
+        selector,
+        revision=None,
+        session_range=None,
+        revoked=False,
+        expires_at=100,
+        derived_processing_until=100,
+    ):
         context = authorization.AuthorizationContext(
             task_id="task-1", active_principal="principal-1", tenant_account="tenant-1",
             selector=selector, purpose="distill-knowledge", revision=revision,
@@ -51,7 +62,8 @@ class IngestionTest(unittest.TestCase):
             "tenant_account": "tenant-1", "selector": selector,
             "purpose": "distill-knowledge", "revision": revision,
             "session_range": None if session_range is None else asdict(session_range),
-            "issued_at": 10, "expires_at": 100, "derived_processing_until": 100,
+            "issued_at": 10, "expires_at": expires_at,
+            "derived_processing_until": derived_processing_until,
             "revoked": revoked,
         }
         grant = dict(common, record_type="content-grant", record_id="grant-1",
@@ -267,10 +279,14 @@ class IngestionTest(unittest.TestCase):
             [record.payload["kind"] for record in Journal(self.root / "event-log.frames").scan().records]
             .count("commit"), 4)
 
-    def test_lark_then_codex_accumulate_atomically_before_leaving_ingest(self):
-        lark_raw = b'{"ok":true,"identity":"user","data":{"content":"safe"}}'
+    def test_actual_dual_ingestion_outputs_compile_to_closed_draft(self):
+        processing_until = 4_102_444_800
+        lark_raw = (
+            b'{"ok":true,"identity":"user","data":'
+            b'{"content":"Synthetic situational context."}}')
         lark_context, lark_grant, lark_attestation = self.authorization(
-            "doc-token", revision="3365")
+            "doc-token", revision="3365",
+            derived_processing_until=processing_until)
         lark_request = ingestion.IngestionRequest(
             "lark", "ingest-dual-lark", self.ingest_state.generation_id,
             lark_context, lark_grant, lark_attestation,
@@ -302,7 +318,8 @@ class IngestionTest(unittest.TestCase):
                      "redacted-current.jsonl").read_bytes()
         bounds = authorization.SessionRange(0, len(codex_raw) - 1)
         codex_context, codex_grant, codex_attestation = self.authorization(
-            "session.jsonl", session_range=bounds)
+            "session.jsonl", session_range=bounds,
+            derived_processing_until=processing_until)
         codex_request = ingestion.IngestionRequest(
             "codex", "ingest-dual-codex", first.generation_id,
             codex_context, codex_grant, codex_attestation,
@@ -333,6 +350,65 @@ class IngestionTest(unittest.TestCase):
             "grants/codex-content-grant.json", "grants/codex-authority-attestation.json",
         }
         self.assertTrue(all((generation / path).is_file() for path in expected))
+
+        lark_provenance = json.loads(
+            (generation / "provenance/lark-spans.json").read_text(
+                encoding="utf-8"))
+        codex_provenance = json.loads(
+            (generation / "provenance/codex-spans.json").read_text(
+                encoding="utf-8"))
+        lark_span = lark_provenance["spans"][0]
+        codex_span = next(
+            item for item in codex_provenance["spans"]
+            if item["claim_eligible"])
+        self.assertFalse(lark_span["claim_eligible"])
+
+        with TaskCoordinator(self.root) as coordinator:
+            selected = coordinator.transition(
+                Event.CAPABILITY_SELECTED,
+                TransitionFacts(selected_capability=True))
+            review = coordinator.transition(
+                Event.EVIDENCE_EXTRACTED,
+                TransitionFacts(evidence_complete=True))
+        self.assertNotEqual(selected.generation_id, review.generation_id)
+
+        value = packet()
+        value["questions"] = []
+        source_records = (
+            (value["evidence"][0], lark_provenance, lark_span, "observation"),
+            (value["evidence"][1], codex_provenance, codex_span, "owner-statement"),
+        )
+        for evidence_record, provenance, span_record, evidence_type in source_records:
+            evidence_record.update({
+                "source_snapshot_id": provenance["source_snapshot_id"],
+                "redacted_span_ids": [span_record["span_id"]],
+                "evidence_type": evidence_type,
+                "excerpt": span_record["text"],
+            })
+        for claim in value["claims"]:
+            claim.update({
+                "redacted_span_ids": [codex_span["span_id"]],
+                "support_evidence_ids": ["ev-session"],
+                "contradiction_evidence_ids": ["ev-document"],
+            })
+        raw_packet = json.dumps(
+            value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+        adjudicated = compiler.adjudicate_knowledge_packet(
+            self.root, raw_packet, "adjudicate-actual-ingestion",
+            review.generation_id)
+        compiled = compiler.compile_capability(
+            self.root, raw_packet, "compile-actual-ingestion",
+            adjudicated.generation_id)
+
+        self.assertEqual(compiled.phase, "evaluate")
+        self.assertNotIn(
+            lark_span["text"],
+            b"\n".join(compiled.draft_files.values()).decode("utf-8"),
+        )
+        compiled_generation = self.root / "generations" / compiled.generation_id
+        self.assertTrue(
+            (compiled_generation / "model/compiled-rule-provenance.json").is_file())
 
     def test_wrong_task_phase_fails_before_source_read(self):
         root = Path(self.directory.name) / "wrong-phase-task"

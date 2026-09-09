@@ -15,10 +15,13 @@ packet is private; never print evidence excerpts, selectors, or provenance.
 | `decisions` | Zero or more ClaimDecision objects |
 | `candidates` | One or more CapabilityCandidate objects |
 | `model` | One CapabilityModel object |
-| `questions` | Zero or more CriticalQuestion objects |
+| `questions` | Zero to 12 CriticalQuestion objects; only one is returned at a time |
 | `uncertainties` | Zero or more lower-impact Uncertainty objects |
 
-Common identifiers are unique, non-empty strings of at most 256 UTF-8 bytes.
+Common identifiers are unique opaque handles of at most 256 UTF-8 bytes. They
+use the record prefix (`ev-`, `cl-`, `dec-`, `cap-`, `model-`, `q-`, `a-`, or
+`u-`) followed only by lowercase ASCII letters, digits, hyphens, or underscores;
+never encode source content or selectors in an identifier.
 Confidence is an integer from 0 through 3. Snapshot IDs are
 `sha256:` plus 64 lowercase hex digits; span IDs are `hmac-sha256:` plus 64.
 The complete JSON is at most 4 MiB and must pass the duplicate-key-safe decoder.
@@ -44,8 +47,9 @@ The complete JSON is at most 4 MiB and must pass the duplicate-key-safe decoder.
 - CapabilityCandidate: `capability_id`, `name`, `purpose`, non-empty `triggers`,
   `outcome`, non-empty `evaluation_scenarios`, `recurrence_count` (1..1000000),
   `decision_impact`, and non-empty `evidence_ids`.
-- CapabilityModel: `model_id`, `selected_capability_id`, `candidate_ids` matching
-  the candidate set exactly, and `sections`. Every section is a non-empty array
+- CapabilityModel: `model_id`, `selected_capability_id`, exact structural marker
+  `selected_by: "current-user"`, `candidate_ids` matching the candidate set
+  exactly, and `sections`. Every section is a non-empty array
   of existing claim IDs: `triggers`, `non_triggers`, `goals`, `non_goals`,
   `inputs`, `outputs`, `invariants`, `cues`, `decision_rules`, `workflow`,
   `exceptions`, `failures`, `examples`, and `dependencies`.
@@ -56,6 +60,12 @@ The complete JSON is at most 4 MiB and must pass the duplicate-key-safe decoder.
   `recommendation`. Each alternative has `alternative_id`, `label`,
   `evidence_ids`, and `behavioral_impact`. A recommendation must name an
   alternative backed by a non-empty subset of the question evidence.
+  Prompt and labels must be original public wording: never copy evidence text,
+  even partially. For evidence of at least 8 UTF-8 bytes, the validator rejects
+  the exact value when it is shorter than 24 Unicode scalars and rejects any
+  24-scalar fragment when it is longer. It also rejects snapshot/span digests,
+  redaction placeholders, and email-shaped values. This is a bounded mechanical
+  backstop, not permission to paraphrase identifying details.
 - Uncertainty: `uncertainty_id`, `summary`, non-empty `evidence_ids`, and
   `behavioral_impact` (`low` or `medium`).
 
@@ -117,6 +127,7 @@ values from the authorized task artifacts; never fabricate provenance.
   "model": {
     "model_id": "model-1",
     "selected_capability_id": "cap-1",
+    "selected_by": "current-user",
     "candidate_ids": ["cap-1"],
     "sections": {
       "triggers": ["cl-rule"],

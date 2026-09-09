@@ -147,7 +147,6 @@ class TransitionFacts:
     sources_ready: bool = False
     capability_map_ready: bool = False
     evidence_complete: bool = False
-    high_impact_conflict: bool = False
     claims_resolved: bool = False
     draft_valid: bool = False
     evaluation_passed: bool = False

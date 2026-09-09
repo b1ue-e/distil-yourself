@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import sys
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -31,7 +32,7 @@ def evidence(identifier, source_kind, span_id, evidence_type="observation"):
         "source_snapshot_id": "sha256:" + ("a" if source_kind == "document" else "b") * 64,
         "redacted_span_ids": [span_id],
         "evidence_type": evidence_type,
-        "excerpt": "Synthetic redacted evidence " + identifier,
+        "excerpt": "Synthetic redacted evidence for " + source_kind,
         "applicability": ["bounded incident response"],
         "confidence": 3,
         "freshness": "current",
@@ -98,6 +99,7 @@ def packet():
         "model": {
             "model_id": "model-1",
             "selected_capability_id": "cap-selected",
+            "selected_by": "current-user",
             "candidate_ids": ["cap-selected", "cap-other"],
             "sections": {section: ["cl-" + section] for section in SECTIONS},
         },
@@ -164,6 +166,12 @@ class KnowledgeContractTest(unittest.TestCase):
 
         value = packet()
         value["decisions"][0]["decided_by"] = "model"
+        with self.assertRaises(knowledge.KnowledgeError) as caught:
+            knowledge.validate_packet(value)
+        self.assertEqual(caught.exception.code, "invalid-claim-decision")
+
+        value = packet()
+        value["model"]["selected_by"] = "model"
         with self.assertRaises(knowledge.KnowledgeError) as caught:
             knowledge.validate_packet(value)
         self.assertEqual(caught.exception.code, "invalid-claim-decision")
@@ -265,6 +273,74 @@ class KnowledgeContractTest(unittest.TestCase):
         with self.assertRaises(knowledge.KnowledgeError) as caught:
             knowledge.validate_packet(value)
         self.assertEqual(caught.exception.code, "unsupported-recommendation")
+
+    def test_question_text_cannot_echo_private_evidence(self):
+        value = packet()
+        private_excerpt = value["evidence"][0]["excerpt"]
+        value["questions"][0]["prompt"] = private_excerpt
+        value["questions"][0]["alternatives"][0]["label"] = private_excerpt.upper()
+
+        with self.assertRaises(knowledge.KnowledgeError) as caught:
+            knowledge.validate_packet(value)
+
+        self.assertEqual(caught.exception.code, "question-private-content")
+
+    def test_question_text_rejects_private_fragments_and_structured_markers(self):
+        base = packet()
+        excerpt = base["evidence"][0]["excerpt"]
+        cases = (
+            excerpt[4:28],
+            base["evidence"][0]["source_snapshot_id"],
+            base["evidence"][0]["redacted_span_ids"][0],
+            "[redacted:credential:hmac-sha256:" + "a" * 64 + "]",
+        )
+        for leaked in cases:
+            with self.subTest(leaked=leaked[:24]):
+                value = deepcopy(base)
+                value["questions"][0]["prompt"] = (
+                    "Choose without exposing " + leaked)
+                with self.assertRaises(knowledge.KnowledgeError) as caught:
+                    knowledge.validate_packet(value)
+                self.assertEqual(
+                    caught.exception.code, "question-private-content")
+
+        value = deepcopy(base)
+        value["evidence"][0]["excerpt"] = "隐私证"
+        value["questions"][0]["prompt"] = "隐私证"
+        with self.assertRaises(knowledge.KnowledgeError) as caught:
+            knowledge.validate_packet(value)
+        self.assertEqual(caught.exception.code, "question-private-content")
+
+    def test_outward_opaque_identifier_cannot_encode_private_evidence(self):
+        value = packet()
+        private_identifier = "cap-private-evidence-handle"
+        value["evidence"][0]["excerpt"] = private_identifier
+        value["candidates"][0]["capability_id"] = private_identifier
+        value["model"]["selected_capability_id"] = private_identifier
+        value["model"]["candidate_ids"][0] = private_identifier
+
+        with self.assertRaises(knowledge.KnowledgeError) as caught:
+            knowledge.validate_packet(value)
+
+        self.assertEqual(caught.exception.code, "question-private-content")
+
+    def test_question_queue_has_a_bounded_resource_limit(self):
+        value = packet()
+        value["questions"] = []
+        for index in range(13):
+            question = deepcopy(packet()["questions"][0])
+            question["question_id"] = "q-" + str(index)
+            value["questions"].append(question)
+
+        with self.assertRaises(knowledge.KnowledgeError) as caught:
+            knowledge.validate_packet(value)
+
+        self.assertEqual(caught.exception.code, "invalid-count")
+
+        with mock.patch.object(knowledge.privacy, "MAX_FRAGMENT_WINDOWS", 0):
+            with self.assertRaises(knowledge.KnowledgeError) as caught:
+                knowledge.validate_packet(packet())
+        self.assertEqual(caught.exception.code, "json-resource-limit")
 
 
 if __name__ == "__main__":

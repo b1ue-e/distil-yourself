@@ -29,7 +29,12 @@ def sha256_id(content):
     return "sha256:" + hashlib.sha256(content).hexdigest()
 
 
-def source_artifacts(active_until=4_102_444_800):
+def source_artifacts(
+    active_until=4_102_444_800,
+    read_until=None,
+    document_eligible=True,
+):
+    read_until = active_until if read_until is None else read_until
     result = {}
     for source, snapshot_id, span_id in (
             ("lark", "sha256:" + "a" * 64,
@@ -42,7 +47,7 @@ def source_artifacts(active_until=4_102_444_800):
             "task_id": "task-private", "issuer": "user-987",
             "active_principal": "user-987", "tenant_account": "tenant-private",
             "selector": "DocABC123" if source == "lark" else "session-private",
-            "expires_at": active_until,
+            "expires_at": read_until,
             "derived_processing_until": active_until,
         }
         grant_record["decision_digest"] = sha256_id(canonical_json(grant_record))
@@ -54,7 +59,7 @@ def source_artifacts(active_until=4_102_444_800):
             "active_principal": "user-987", "tenant_account": "tenant-private",
             "selector": "DocABC123" if source == "lark" else "session-private",
             "content_owner": "user-987",
-            "expires_at": active_until,
+            "expires_at": read_until,
             "derived_processing_until": active_until,
         }
         authority_record["decision_digest"] = sha256_id(
@@ -81,8 +86,8 @@ def source_artifacts(active_until=4_102_444_800):
             "from_node": {"kind": nodes[index][0], "digest": nodes[index][1]},
             "to_node": {"kind": nodes[index + 1][0], "digest": nodes[index + 1][1]},
         } for index, relation in enumerate(relations)]
-        excerpt = "Synthetic redacted evidence " + (
-            "ev-document" if source == "lark" else "ev-session")
+        excerpt = "Synthetic redacted evidence for " + (
+            "document" if source == "lark" else "session")
         result.update({
             f"sources/{source}-snapshot.json": canonical_json({
                 "manifest": {
@@ -98,7 +103,9 @@ def source_artifacts(active_until=4_102_444_800):
                 "source_snapshot_id": snapshot_id,
                 "spans": [{
                     "span_id": span_id, "text": excerpt,
-                    "claim_eligible": True, "derivations": derivations,
+                    "claim_eligible": (
+                        document_eligible if source == "lark" else True),
+                    "derivations": derivations,
                 }],
             }),
             f"grants/{source}-content-grant.json": grant,
@@ -129,7 +136,7 @@ def prepare_review_task(root, stored=None):
             TransitionFacts(selected_capability=True))
         return coordinator.transition(
             Event.EVIDENCE_EXTRACTED,
-            TransitionFacts(evidence_complete=True, high_impact_conflict=True))
+            TransitionFacts(evidence_complete=True))
 
 
 class CapabilityCompilerTest(unittest.TestCase):
@@ -192,11 +199,60 @@ class CapabilityCompilerTest(unittest.TestCase):
         self.assertEqual(selection, {
             "schema_version": "knowledge-distiller.capability-selection/v1",
             "selected_capability_id": "cap-selected",
+            "selected_by": "current-user",
         })
+        rule_provenance = json.loads(
+            (generation / "model/compiled-rule-provenance.json").read_text(
+                encoding="utf-8"))
+        self.assertEqual(
+            rule_provenance["schema_version"],
+            "knowledge-distiller.compiled-rule-provenance/v1",
+        )
+        self.assertRegex(
+            rule_provenance["compiler"]["compiler_id"],
+            r"\Asha256:[0-9a-f]{64}\Z",
+        )
+        self.assertEqual(len(rule_provenance["derivations"]), len(SECTIONS))
+        self.assertTrue(all(
+            [edge["relation"] for edge in item["edges"]] == [
+                "contains-rule", "compiled-by", "compiled-from-claim",
+                "confirmed-by-decision",
+            ]
+            for item in rule_provenance["derivations"]
+        ))
         self.assertEqual(inspect_task(self.root).state.phase, Phase.EVALUATE)
         reference = result.draft_files["references/capability.md"].decode("utf-8")
         for section in SECTIONS:
             self.assertIn(compiler.SECTION_HEADINGS[section], reference)
+
+    def test_rule_provenance_ids_bind_exact_generated_content(self):
+        def compiled_provenance(value):
+            validated = compiler.validate_compilation_input(encoded_packet(value))
+            bundle = compiler._render_bundle(validated)
+            manifest = compiler._validated_manifest(bundle)
+            manifest_bytes = canonical_json(
+                [asdict(record) for record in manifest])
+            return json.loads(compiler._compiled_rule_provenance(
+                validated, manifest_bytes))
+
+        original = self.compilable_packet()
+        changed = deepcopy(original)
+        changed["claims"][0]["statement"] = (
+            "Use changed bounded synthetic guidance for triggers.")
+
+        before = compiled_provenance(original)
+        after = compiled_provenance(changed)
+
+        self.assertNotEqual(
+            before["draft_manifest_digest"], after["draft_manifest_digest"])
+        self.assertNotEqual(
+            [item["generated_section_id"] for item in before["derivations"]],
+            [item["generated_section_id"] for item in after["derivations"]],
+        )
+        self.assertNotEqual(
+            [item["compiled_rule_id"] for item in before["derivations"]],
+            [item["compiled_rule_id"] for item in after["derivations"]],
+        )
 
     def test_draft_contains_guidance_but_no_private_provenance_or_evidence(self):
         value = self.compilable_packet()
@@ -276,6 +332,27 @@ class CapabilityCompilerTest(unittest.TestCase):
             self.adjudicate(value, "private-control-token")
 
         self.assertEqual(caught.exception.code, "private-content-in-draft")
+
+    def test_confirmed_claim_cannot_copy_a_partial_private_excerpt(self):
+        value = self.compilable_packet()
+        private_excerpt = (
+            "Private evidence contains a uniquely identifying synthetic "
+            "sequence that must stay inside the task workspace.")
+        value["evidence"][0]["excerpt"] = private_excerpt
+        value["claims"][0]["statement"] = private_excerpt[18:70]
+        stored = source_artifacts()
+        provenance = json.loads(stored["provenance/lark-spans.json"])
+        provenance["spans"][0]["text"] = private_excerpt
+        stored["provenance/lark-spans.json"] = canonical_json(provenance)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "task"
+            review = prepare_review_task(root, stored)
+            with self.assertRaises(compiler.CompilerError) as caught:
+                compiler.adjudicate_knowledge_packet(
+                    root, encoded_packet(value), "partial-private-claim",
+                    review.generation_id)
+
+        self.assertEqual(caught.exception.code, "private-content-in-draft")
         self.assertEqual(inspect_task(self.root).generation_id,
                          self.review_state.generation_id)
 
@@ -298,12 +375,12 @@ class CapabilityCompilerTest(unittest.TestCase):
 
     def test_short_private_identifiers_do_not_match_unrelated_prose(self):
         value = self.compilable_packet()
-        value["evidence"][0]["evidence_id"] = "a"
+        value["evidence"][0]["evidence_id"] = "ev-a"
         for claim in value["claims"]:
-            claim["support_evidence_ids"] = ["a"]
-        value["candidates"][0]["evidence_ids"] = ["a", "ev-session"]
-        value["candidates"][1]["evidence_ids"] = ["a"]
-        value["uncertainties"][0]["evidence_ids"] = ["a"]
+            claim["support_evidence_ids"] = ["ev-a"]
+        value["candidates"][0]["evidence_ids"] = ["ev-a", "ev-session"]
+        value["candidates"][1]["evidence_ids"] = ["ev-a"]
+        value["uncertainties"][0]["evidence_ids"] = ["ev-a"]
 
         compile_state = self.adjudicate(value)
         result = compiler.compile_capability(
@@ -431,6 +508,103 @@ class CapabilityCompilerTest(unittest.TestCase):
                 self.assertEqual(caught.exception.code, code)
                 self.assertEqual(inspect_task(root).generation_id,
                                  review.generation_id)
+
+    def test_read_expiry_does_not_block_authorized_derived_processing(self):
+        value = self.compilable_packet()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "task"
+            review = prepare_review_task(
+                root, source_artifacts(read_until=1))
+
+            result = compiler.adjudicate_knowledge_packet(
+                root, encoded_packet(value), "after-read-expiry",
+                review.generation_id)
+
+        self.assertEqual(result.state.phase, Phase.COMPILE)
+
+    def test_noneligible_evidence_can_be_context_but_not_claim_support(self):
+        value = self.compilable_packet()
+        value["evidence"][0]["evidence_type"] = "observation"
+        session_span = value["evidence"][1]["redacted_span_ids"]
+        for claim in value["claims"]:
+            claim["support_evidence_ids"] = ["ev-session"]
+            claim["contradiction_evidence_ids"] = ["ev-document"]
+            claim["redacted_span_ids"] = session_span
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "task"
+            review = prepare_review_task(
+                root, source_artifacts(document_eligible=False))
+            adjudicated = compiler.adjudicate_knowledge_packet(
+                root, encoded_packet(value), "context-only",
+                review.generation_id)
+            result = compiler.compile_capability(
+                root, encoded_packet(value), "compile-context-only",
+                adjudicated.generation_id)
+
+        self.assertEqual(result.phase, "evaluate")
+
+        invalid = self.compilable_packet()
+        invalid["evidence"][0]["evidence_type"] = "observation"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "task"
+            review = prepare_review_task(
+                root, source_artifacts(document_eligible=False))
+            with self.assertRaises(compiler.CompilerError) as caught:
+                compiler.adjudicate_knowledge_packet(
+                    root, encoded_packet(invalid), "invalid-support",
+                    review.generation_id)
+        self.assertEqual(caught.exception.code, "source-provenance-mismatch")
+
+        mixed_support = self.compilable_packet()
+        session_span = mixed_support["evidence"][1]["redacted_span_ids"]
+        for claim in mixed_support["claims"]:
+            claim["support_evidence_ids"] = ["ev-session", "ev-document"]
+            claim["redacted_span_ids"] = session_span
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "task"
+            review = prepare_review_task(
+                root, source_artifacts(document_eligible=False))
+            with self.assertRaises(compiler.CompilerError) as caught:
+                compiler.adjudicate_knowledge_packet(
+                    root, encoded_packet(mixed_support), "mixed-support",
+                    review.generation_id)
+        self.assertEqual(caught.exception.code, "source-provenance-mismatch")
+
+    def test_unselected_rejected_claim_may_retain_noneligible_context(self):
+        value = self.compilable_packet()
+        historical = deepcopy(value["claims"][0])
+        historical.update({
+            "claim_id": "cl-rejected-history",
+            "redacted_span_ids": value["evidence"][0]["redacted_span_ids"],
+            "support_evidence_ids": ["ev-document"],
+            "contradiction_evidence_ids": [],
+        })
+        value["claims"].append(historical)
+        value["decisions"].append({
+            "decision_id": "dec-rejected-history",
+            "claim_id": "cl-rejected-history",
+            "outcome": "rejected",
+            "decided_by": "current-user",
+            "rationale": "Retain only as rejected historical context.",
+            "superseded_by": None,
+        })
+        for claim in value["claims"][:-1]:
+            claim["redacted_span_ids"] = value["evidence"][1]["redacted_span_ids"]
+            claim["support_evidence_ids"] = ["ev-session"]
+            claim["contradiction_evidence_ids"] = ["ev-document"]
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "task"
+            review = prepare_review_task(
+                root, source_artifacts(document_eligible=False))
+            adjudicated = compiler.adjudicate_knowledge_packet(
+                root, encoded_packet(value), "retain-rejected-context",
+                review.generation_id)
+            result = compiler.compile_capability(
+                root, encoded_packet(value), "compile-with-rejected-context",
+                adjudicated.generation_id)
+
+        self.assertEqual(result.phase, "evaluate")
 
 
 if __name__ == "__main__":

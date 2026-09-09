@@ -90,7 +90,7 @@ python3 knowledge-distiller/scripts/kd.py compile-capability /absolute/path/to/t
 
 Each ingestion request is private and covers one source selector and pinned revision or closed session range. Both ContentGrant and AuthorityAttestation are validated before every source read. Standalone `kd.py ingest-source` returns `ingestion-runtime-unavailable` before reading the request file. Claims retain the chain `source snapshot → native evidence → redacted span → ContentGrant → AuthorityAttestation`. Ask at most one critical question at a time; a lower-impact uncertainty does not block progress.
 
-Before adjudication, the current user must explicitly confirm the selected capability and every claim that will be published. The CLI validates the `current-user` marker structurally; it does not authenticate the current user. Do not generate or infer user confirmation. Compilation accepts only the exact adjudicated packet bytes, validates and stores a private draft plus manifest, and does not install or export.
+Before adjudication, the current user must explicitly confirm the selected capability and every claim that will be published. The CLI validates the `current-user` marker structurally; it does not authenticate the current user. Do not generate or infer user confirmation. Compilation accepts only the exact adjudicated packet bytes, validates and stores a private draft, manifest, and compiled-rule provenance, and does not install or export.
 
 Compilation revalidates persisted provenance and recorded grant digest/time bounds; live revocation and issuer authentication remain broker responsibilities. Bounded evidence review is unavailable; an explicit request does not create a supported evidence-output path.
 

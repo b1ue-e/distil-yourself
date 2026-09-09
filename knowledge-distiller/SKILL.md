@@ -40,7 +40,7 @@ When a user provides a specific candidate canonical graph for normalization or v
 5. A trusted host must inject the exact Lark or Codex runtime. Ingest each separately; after both, follow the mode route in [references/workflow.md](references/workflow.md). Never print request content or redacted evidence.
 6. Build the strict packet defined in [references/knowledge-packet.md](references/knowledge-packet.md). Preserve `source snapshot → native evidence → redacted span → ContentGrant → AuthorityAttestation` for every claim.
 7. Ask at most one critical question at a time. A lower-impact uncertainty does not block progress. Before adjudication, the current user must explicitly confirm the selected capability and every claim that will be published. Do not generate or infer user confirmation.
-8. Compile only the exact adjudicated packet bytes and confirmed publishable guidance. The compiler validates and privately persists only `SKILL.md`, `references/capability.md`, and their manifest; it does not install or export.
+8. Compile only the exact adjudicated packet bytes and confirmed publishable guidance. The compiler validates the fixed `SKILL.md` and `references/capability.md` bundle, then privately persists their manifest and compiled-rule provenance; it does not install or export.
 9. Use `task-transition` for other phases; keep content, secrets, selectors, and free-form text out of facts.
 10. Stop at the next unavailable boundary; never simulate adapters, evaluation, signatures, export, or purge.
 

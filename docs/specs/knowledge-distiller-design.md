@@ -457,9 +457,8 @@ A task has a durable `mode` (`discover`, `distill`, or `update`), a monotonicall
 | `INGEST` | every selected source is snapshotted or fail-closed excluded | `MAP` for discover mode; otherwise `CAPABILITY_REVIEW` |
 | `MAP` | deterministic capability map completes | `CAPABILITY_REVIEW` |
 | `CAPABILITY_REVIEW` | user selects or confirms one capability | `EXTRACT` |
-| `EXTRACT` | evidence predicate passes with no high-impact conflict | `COMPILE` |
-| `EXTRACT` | at least one high-impact conflict exists | `CLAIM_REVIEW` |
-| `CLAIM_REVIEW` | all blocking claims receive `ClaimDecision` | `COMPILE` |
+| `EXTRACT` | evidence predicate passes; proposed claims and critical questions are ready for adjudication | `CLAIM_REVIEW` |
+| `CLAIM_REVIEW` | all critical questions are resolved and every claim used by the selected model has a confirmed `ClaimDecision` | `COMPILE` |
 | `COMPILE` | compiler predicate passes | `EVALUATE` with frozen draft digest |
 | `EVALUATE` | thresholds pass | `VERSION_REVIEW` |
 | `EVALUATE` | thresholds fail and revision budget remains | `REVISION_REVIEW` |

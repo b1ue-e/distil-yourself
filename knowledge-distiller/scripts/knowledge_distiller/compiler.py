@@ -5,13 +5,12 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import re
 import tempfile
 import time
 from typing import Dict, Iterable, Tuple
 import unicodedata
 
-from . import artifacts, knowledge
+from . import artifacts, knowledge, privacy
 from .journal import canonical_json
 from .persistence import TaskCoordinator, TaskPersistenceError
 from .state import Event, Phase, TransitionFacts
@@ -53,6 +52,9 @@ PROVENANCE_KINDS = ("redacted-span",) + PROVENANCE_RELATIONS
 ADJUDICATED_PACKET_PATH = "model/adjudicated-knowledge-packet.json"
 SELECTED_CAPABILITY_PATH = "model/selected-capability.json"
 DECISIONS_PATH = "decisions/claim-decisions.json"
+COMPILED_PROVENANCE_PATH = "model/compiled-rule-provenance.json"
+COMPILER_VERSION = "knowledge-distiller-compiler/1.0.0"
+COMPILER_ID = "sha256:" + hashlib.sha256(COMPILER_VERSION.encode("utf-8")).hexdigest()
 SENSITIVE_PRIVATE_FIELDS = frozenset({
     "active_principal", "actor_id", "content_owner", "decision_digest", "digest",
     "id", "issuer", "locator", "native_locator_digest", "participant_ids",
@@ -60,14 +62,6 @@ SENSITIVE_PRIVATE_FIELDS = frozenset({
     "project_id", "record_id", "selector", "session_id", "source_snapshot_id",
     "span_id", "task_id", "tenant_account", "text",
 })
-FORBIDDEN_GUIDANCE_PATTERNS = (
-    re.compile(r"(?:sha256|hmac-sha256):[0-9a-f]{64}\b", re.IGNORECASE),
-    re.compile(r"\[redacted:[^\]\n]{1,256}\]", re.IGNORECASE),
-    re.compile(
-        r"(?<![\w.+-])[\w.+-]{1,128}@[\w-]{1,128}"
-        r"(?:\.[\w-]{1,63}){1,8}(?![\w.-])"
-    ),
-)
 COMPILER_ERROR_CODES = frozenset({
     "adjudication-invalid", "adjudication-mismatch", "asset-not-allowlisted",
     "bundle-too-large", "compilation-invalid", "critical-question-pending",
@@ -126,7 +120,7 @@ def _artifact_map(items) -> Dict[str, bytes]:
     return {entry["path"]: content for entry, content in (items or [])}
 
 
-def _active_grant(raw: bytes, record_type: str, now: int) -> str:
+def _processing_grant(raw: bytes, record_type: str, now: int) -> str:
     value = _decoded_private_json(raw)
     if (type(value) is not dict or value.get("record_type") != record_type
             or type(value.get("revoked")) is not bool or value["revoked"]
@@ -135,7 +129,9 @@ def _active_grant(raw: bytes, record_type: str, now: int) -> str:
             or type(value.get("decision_digest")) is not str
             or knowledge.SNAPSHOT_DIGEST.fullmatch(value["decision_digest"]) is None):
         _reject("source-grant-invalid")
-    if now >= value["expires_at"] or now >= value["derived_processing_until"]:
+    # The read window governs acquisition only. Compilation reuses an already
+    # verified redacted snapshot until its separate derived-processing bound.
+    if now >= value["derived_processing_until"]:
         _reject("source-grant-expired")
     claimed = value["decision_digest"]
     unsigned = dict(value)
@@ -234,8 +230,8 @@ def _validate_persisted_provenance(
         required = (source_path, evidence_path, provenance_path, grant_path, authority_path)
         if any(path not in stored for path in required):
             _reject("source-provenance-missing")
-        grant_id = _active_grant(stored[grant_path], "content-grant", now)
-        authority_id = _active_grant(
+        grant_id = _processing_grant(stored[grant_path], "content-grant", now)
+        authority_id = _processing_grant(
             stored[authority_path], "authority-attestation", now)
         native_evidence = _decoded_private_json(stored[evidence_path])
         if type(native_evidence) is not dict:
@@ -256,9 +252,27 @@ def _validate_persisted_provenance(
     for evidence in packet.evidence:
         spans = indexes[evidence.source_kind]
         linked = [spans.get(span_id) for span_id in evidence.redacted_span_ids]
-        if (any(item is None or not item[0] for item in linked)
+        if (any(item is None for item in linked)
                 or evidence.excerpt != "\n".join(item[1] for item in linked)):
             _reject("source-provenance-mismatch")
+    all_spans = {
+        span_id: value
+        for source_spans in indexes.values()
+        for span_id, value in source_spans.items()
+    }
+    claims = {item.claim_id: item for item in packet.claims}
+    evidence = {item.evidence_id: item for item in packet.evidence}
+    selected_claim_ids = {
+        claim_id for section in packet.model.sections.values()
+        for claim_id in section
+    }
+    if any(
+        not all_spans[span_id][0]
+        for claim_id in selected_claim_ids
+        for evidence_id in claims[claim_id].support_evidence_ids
+        for span_id in evidence[evidence_id].redacted_span_ids
+    ):
+        _reject("source-provenance-mismatch")
 
 
 def _adjudication_bytes(packet: knowledge.KnowledgePacket, raw_packet: bytes):
@@ -267,9 +281,83 @@ def _adjudication_bytes(packet: knowledge.KnowledgePacket, raw_packet: bytes):
         SELECTED_CAPABILITY_PATH: canonical_json({
             "schema_version": "knowledge-distiller.capability-selection/v1",
             "selected_capability_id": packet.model.selected_capability_id,
+            "selected_by": packet.model.selected_by,
         }),
         DECISIONS_PATH: canonical_json([asdict(item) for item in packet.decisions]),
     }
+
+
+def _stable_id(domain: str, value: dict) -> str:
+    return "sha256:" + hashlib.sha256(
+        domain.encode("utf-8") + b"\0" + canonical_json(value)
+    ).hexdigest()
+
+
+def _compiled_rule_provenance(
+    packet: knowledge.KnowledgePacket,
+    manifest_bytes: bytes,
+) -> bytes:
+    claims = {item.claim_id: item for item in packet.claims}
+    decisions = {
+        item.claim_id: item.decision_id
+        for item in packet.decisions
+        if item.outcome == "confirmed"
+    }
+    manifest_digest = "sha256:" + hashlib.sha256(manifest_bytes).hexdigest()
+    derivations = []
+    for section in knowledge.SECTIONS:
+        section_content = _render_section(
+            claims, packet.model.sections[section], section).encode("utf-8")
+        section_content_digest = (
+            "sha256:" + hashlib.sha256(section_content).hexdigest())
+        section_id = _stable_id("generated-section", {
+            "output_path": "references/capability.md", "section": section,
+            "content_digest": section_content_digest,
+            "draft_manifest_digest": manifest_digest,
+        })
+        for ordinal, claim_id in enumerate(packet.model.sections[section]):
+            rule_content = ("- " + claims[claim_id].statement + "\n").encode(
+                "utf-8")
+            rule_content_digest = (
+                "sha256:" + hashlib.sha256(rule_content).hexdigest())
+            rule_id = _stable_id("compiled-rule", {
+                "section_id": section_id, "ordinal": ordinal,
+                "claim_id": claim_id, "decision_id": decisions[claim_id],
+                "compiler_id": COMPILER_ID,
+                "content_digest": rule_content_digest,
+            })
+            section_node = {"kind": "generated-section", "id": section_id}
+            rule_node = {"kind": "compiled-rule", "id": rule_id}
+            compiler_node = {"kind": "compiler-version", "id": COMPILER_ID}
+            claim_node = {"kind": "confirmed-claim", "id": claim_id}
+            decision_node = {
+                "kind": "claim-decision", "id": decisions[claim_id],
+            }
+            derivations.append({
+                "output_path": "references/capability.md",
+                "section": section,
+                "ordinal": ordinal,
+                "generated_section_id": section_id,
+                "generated_section_content_digest": section_content_digest,
+                "compiled_rule_id": rule_id,
+                "compiled_rule_content_digest": rule_content_digest,
+                "edges": [
+                    {"relation": "contains-rule", "from_node": section_node,
+                     "to_node": rule_node},
+                    {"relation": "compiled-by", "from_node": rule_node,
+                     "to_node": compiler_node},
+                    {"relation": "compiled-from-claim", "from_node": rule_node,
+                     "to_node": claim_node},
+                    {"relation": "confirmed-by-decision", "from_node": claim_node,
+                     "to_node": decision_node},
+                ],
+            })
+    return canonical_json({
+        "schema_version": "knowledge-distiller.compiled-rule-provenance/v1",
+        "compiler": {"compiler_id": COMPILER_ID, "version": COMPILER_VERSION},
+        "draft_manifest_digest": manifest_digest,
+        "derivations": derivations,
+    })
 
 
 def validate_compilation_input(raw: bytes) -> knowledge.KnowledgePacket:
@@ -320,6 +408,18 @@ def _frontmatter_description(trigger: str) -> str:
 
 def _bullet_lines(values: Iterable[str]) -> str:
     return "\n".join("- " + value for value in values)
+
+
+def _render_section(
+    claims: Dict[str, knowledge.Claim],
+    claim_ids: Iterable[str],
+    section: str,
+) -> str:
+    statements = [
+        claims[claim_id].statement
+        for claim_id in claim_ids
+    ]
+    return SECTION_HEADINGS[section] + "\n\n" + _bullet_lines(statements) + "\n"
 
 
 def _private_tokens(packet: knowledge.KnowledgePacket) -> Tuple[str, ...]:
@@ -374,7 +474,13 @@ def _reject_private_content(
         # structurally excluded by the closed renderer instead.
         if len(encoded) >= 4 and normalized_token in normalized_draft:
             _reject("private-content-in-draft")
-    if any(pattern.search(text) for pattern in FORBIDDEN_GUIDANCE_PATTERNS):
+    try:
+        contains_private_fragment = privacy.contains_private_fragment(
+            (text,), _private_tokens(packet) + stored_tokens)
+    except privacy.PrivacyBudgetExceeded:
+        _reject("private-content-in-draft")
+    if (contains_private_fragment
+            or privacy.contains_forbidden_marker(text)):
         _reject("private-content-in-draft")
 
 
@@ -402,13 +508,8 @@ def _render_bundle(packet: knowledge.KnowledgePacket) -> Dict[str, bytes]:
         "This reference contains only user-confirmed, publishable guidance.\n",
     ]
     for section in knowledge.SECTIONS:
-        statements = [
-            claims[claim_id].statement
-            for claim_id in packet.model.sections[section]
-        ]
-        reference_parts.append(
-            SECTION_HEADINGS[section] + "\n\n" + _bullet_lines(statements) + "\n"
-        )
+        reference_parts.append(_render_section(
+            claims, packet.model.sections[section], section))
     bundle = {
         "SKILL.md": skill.encode("utf-8"),
         "references/capability.md": "\n".join(reference_parts).encode("utf-8"),
@@ -511,6 +612,8 @@ def compile_capability(
                 if not path.startswith("draft-skill/")
             }
             existing["draft-skill/manifest.json"] = manifest_bytes
+            existing[COMPILED_PROVENANCE_PATH] = _compiled_rule_provenance(
+                packet, manifest_bytes)
             for relative_path, content in bundle.items():
                 existing["draft-skill/" + relative_path] = content
             with coordinator.artifact_transaction(

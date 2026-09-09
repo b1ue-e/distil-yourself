@@ -8,6 +8,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 README_FILE = ROOT / "README.md"
+DESIGN_FILE = ROOT / "docs" / "specs" / "knowledge-distiller-design.md"
 SKILL_DIR = ROOT / "knowledge-distiller"
 SKILL_FILE = SKILL_DIR / "SKILL.md"
 EVAL_FILE = SKILL_DIR / "evals" / "evals.json"
@@ -607,6 +608,19 @@ class SkillContractTest(unittest.TestCase):
         )
         self.assertIn(
             "`distill` and `update` advance directly to `capability-review`",
+            normalized,
+        )
+
+    def test_design_requires_claim_review_after_every_extraction(self) -> None:
+        normalized = " ".join(
+            DESIGN_FILE.read_text(encoding="utf-8").lower().split())
+        self.assertNotIn(
+            "`extract` | evidence predicate passes with no high-impact conflict | `compile`",
+            normalized,
+        )
+        self.assertIn(
+            "`extract` | evidence predicate passes; proposed claims and critical "
+            "questions are ready for adjudication | `claim_review`",
             normalized,
         )
 

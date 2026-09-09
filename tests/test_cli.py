@@ -58,6 +58,58 @@ class CliTest(unittest.TestCase):
             payload = kd_cli._run(("next-critical-question", "packet.json"))
         self.assertIsNone(payload["question"])
 
+    def test_next_critical_question_rejects_private_marker_without_output(self) -> None:
+        value = json.loads(self.knowledge_packet_bytes())
+        value["questions"][0]["prompt"] += (
+            " hmac-sha256:" + "a" * 64)
+        raw = json.dumps(value, separators=(",", ":")).encode("utf-8")
+        with mock.patch.object(source_io, "read_source", return_value=raw), \
+                mock.patch.object(kd_cli.sys, "stdout", io.StringIO()) as stdout, \
+                mock.patch.object(kd_cli.sys, "stderr", io.StringIO()) as stderr:
+            code = kd_cli.main(("next-critical-question", "packet.json"))
+
+        self.assertEqual(code, 3)
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertEqual(json.loads(stderr.getvalue())["error"], {
+            "code": "knowledge-packet-rejected",
+            "reason": "question-private-content",
+        })
+        self.assertNotIn("hmac-sha256", stdout.getvalue())
+
+    def test_knowledge_commands_never_emit_private_encoded_identifiers(self) -> None:
+        from tests.test_knowledge import packet
+
+        cases = []
+        value = packet()
+        private_identifier = "cap-private-evidence-handle"
+        value["evidence"][0]["excerpt"] = private_identifier
+        value["candidates"][0]["capability_id"] = private_identifier
+        value["model"]["selected_capability_id"] = private_identifier
+        value["model"]["candidate_ids"][0] = private_identifier
+        cases.append(("validate-knowledge-packet", value))
+
+        value = packet()
+        private_identifier = "q-private-evidence-handle"
+        value["evidence"][0]["excerpt"] = private_identifier
+        value["questions"][0]["question_id"] = private_identifier
+        cases.append(("next-critical-question", value))
+
+        for command, value in cases:
+            raw = json.dumps(value, separators=(",", ":")).encode("utf-8")
+            with self.subTest(command=command), mock.patch.object(
+                    source_io, "read_source", return_value=raw), mock.patch.object(
+                    kd_cli.sys, "stdout", io.StringIO()) as stdout, mock.patch.object(
+                    kd_cli.sys, "stderr", io.StringIO()) as stderr:
+                code = kd_cli.main((command, "packet.json"))
+
+            self.assertEqual(code, 3)
+            self.assertEqual(stdout.getvalue(), "")
+            self.assertEqual(json.loads(stderr.getvalue())["error"], {
+                "code": "knowledge-packet-rejected",
+                "reason": "question-private-content",
+            })
+            self.assertNotIn(private_identifier, stdout.getvalue())
+
     def test_compile_capability_emits_manifest_not_draft_or_private_packet(self) -> None:
         raw = self.knowledge_packet_bytes(questions=False)
         result = compiler.CompilationResult(

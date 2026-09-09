@@ -146,7 +146,7 @@ class StateTransitionTest(unittest.TestCase):
         review = transition(
             state,
             Event.EVIDENCE_EXTRACTED,
-            TransitionFacts(evidence_complete=True, high_impact_conflict=True),
+            TransitionFacts(evidence_complete=True),
         )
         self.assertEqual(review.phase, Phase.CLAIM_REVIEW)
 
@@ -156,13 +156,6 @@ class StateTransitionTest(unittest.TestCase):
             TransitionFacts(evidence_complete=True, claims_resolved=True),
         )
         self.assertEqual(apparently_resolved.phase, Phase.CLAIM_REVIEW)
-
-        unresolved = transition(
-            state,
-            Event.EVIDENCE_EXTRACTED,
-            TransitionFacts(evidence_complete=True),
-        )
-        self.assertEqual(unresolved.phase, Phase.CLAIM_REVIEW)
 
     def test_revision_can_return_to_evaluation_and_increments_epoch(self) -> None:
         state = TaskState(mode=Mode.UPDATE, phase=Phase.REVISION_REVIEW, epoch=4)

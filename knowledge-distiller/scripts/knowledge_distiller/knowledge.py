@@ -5,7 +5,7 @@ import re
 from types import MappingProxyType
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple
 
-from . import adapters
+from . import adapters, privacy
 
 
 SCHEMA_VERSION = "knowledge-distiller.knowledge-packet/v1"
@@ -17,6 +17,9 @@ SECTIONS = (
 )
 SNAPSHOT_DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
 SPAN_DIGEST = re.compile(r"hmac-sha256:[0-9a-f]{64}\Z")
+OPAQUE_IDENTIFIER_SUFFIX = re.compile(
+    r"[a-z0-9](?:[a-z0-9_-]{0,248}[a-z0-9])?\Z"
+)
 SOURCE_KINDS = frozenset({"document", "session"})
 EVIDENCE_TYPES = frozenset({"observation", "owner-statement", "inference"})
 CLAIM_TYPES = EVIDENCE_TYPES
@@ -47,6 +50,7 @@ KNOWLEDGE_ERROR_CODES = frozenset({
     "invalid-type", "invalid-unicode-scalar", "invalid-utf8",
     "json-resource-limit", "json-too-deep", "missing-field",
     "noncritical-question", "packet-too-large", "unknown-capability",
+    "question-private-content",
     "unknown-claim", "unknown-decision", "unknown-evidence", "unknown-field",
     "unsupported-recommendation", "unsupported-schema",
 })
@@ -134,6 +138,7 @@ class CapabilityScore:
 class CapabilityModel:
     model_id: str
     selected_capability_id: str
+    selected_by: str
     candidate_ids: Tuple[str, ...]
     sections: Mapping[str, Tuple[str, ...]]
 
@@ -214,8 +219,13 @@ def _text(value: Any, minimum: int = 1, maximum: int = 4096) -> str:
     return value
 
 
-def _identifier(value: Any) -> str:
-    return _text(value, 1, 256)
+def _identifier(value: Any, prefix: str) -> str:
+    identifier = _text(value, 3, 256)
+    if (not identifier.startswith(prefix + "-")
+            or OPAQUE_IDENTIFIER_SUFFIX.fullmatch(
+                identifier[len(prefix) + 1:]) is None):
+        _reject("invalid-text")
+    return identifier
 
 
 def _enum(value: Any, choices: Set[str]) -> str:
@@ -230,8 +240,8 @@ def _integer(value: Any, minimum: int, maximum: int) -> int:
     return value
 
 
-def _optional_identifier(value: Any) -> Optional[str]:
-    return None if value is None else _identifier(value)
+def _optional_identifier(value: Any, prefix: str) -> Optional[str]:
+    return None if value is None else _identifier(value, prefix)
 
 
 def _string_array(value: Any, minimum: int = 1) -> Tuple[str, ...]:
@@ -241,8 +251,12 @@ def _string_array(value: Any, minimum: int = 1) -> Tuple[str, ...]:
     return result
 
 
-def _identifier_array(value: Any, minimum: int = 1) -> Tuple[str, ...]:
-    result = tuple(_identifier(item) for item in _array(value, minimum))
+def _identifier_array(
+    value: Any,
+    minimum: int = 1,
+    prefix: str = "",
+) -> Tuple[str, ...]:
+    result = tuple(_identifier(item, prefix) for item in _array(value, minimum))
     if len(set(result)) != len(result):
         _reject("duplicate-identifier")
     return result
@@ -285,11 +299,11 @@ def _validate_evidence(raw: Any) -> EvidenceRecord:
         "evidence_type", "excerpt", "applicability", "confidence", "freshness",
         "freshness_reason", "sensitivity",
     })
-    spans = _identifier_array(value["redacted_span_ids"])
+    spans = _string_array(value["redacted_span_ids"])
     for span_id in spans:
         _span_digest(span_id)
     return EvidenceRecord(
-        evidence_id=_identifier(value["evidence_id"]),
+        evidence_id=_identifier(value["evidence_id"], "ev"),
         source_kind=_enum(value["source_kind"], SOURCE_KINDS),
         source_snapshot_id=_snapshot_digest(value["source_snapshot_id"]),
         redacted_span_ids=spans,
@@ -312,15 +326,16 @@ def _validate_claim(raw: Any) -> Claim:
     })
     if value["status"] != "proposed":
         _reject("invalid-claim-status")
-    spans = _identifier_array(value["redacted_span_ids"])
+    spans = _string_array(value["redacted_span_ids"])
     for span_id in spans:
         _span_digest(span_id)
-    support = _identifier_array(value["support_evidence_ids"])
-    contradiction = _identifier_array(value["contradiction_evidence_ids"], 0)
+    support = _identifier_array(value["support_evidence_ids"], prefix="ev")
+    contradiction = _identifier_array(
+        value["contradiction_evidence_ids"], 0, "ev")
     if set(support) & set(contradiction):
         _reject("claim-evidence-overlap")
     return Claim(
-        claim_id=_identifier(value["claim_id"]),
+        claim_id=_identifier(value["claim_id"], "cl"),
         claim_type=_enum(value["claim_type"], CLAIM_TYPES),
         statement=_text(value["statement"], 1, 16 * 1024),
         redacted_span_ids=spans,
@@ -344,12 +359,12 @@ def _validate_decision(raw: Any) -> ClaimDecision:
     if value["decided_by"] != "current-user":
         _reject("invalid-claim-decision")
     outcome = _enum(value["outcome"], DECISION_OUTCOMES)
-    superseded_by = _optional_identifier(value["superseded_by"])
+    superseded_by = _optional_identifier(value["superseded_by"], "dec")
     if (outcome == "superseded") != (superseded_by is not None):
         _reject("invalid-claim-decision")
     return ClaimDecision(
-        decision_id=_identifier(value["decision_id"]),
-        claim_id=_identifier(value["claim_id"]),
+        decision_id=_identifier(value["decision_id"], "dec"),
+        claim_id=_identifier(value["claim_id"], "cl"),
         outcome=outcome,
         decided_by="current-user",
         rationale=_text(value["rationale"]),
@@ -364,7 +379,7 @@ def _validate_candidate(raw: Any) -> CapabilityCandidate:
         "evidence_ids",
     })
     return CapabilityCandidate(
-        capability_id=_identifier(value["capability_id"]),
+        capability_id=_identifier(value["capability_id"], "cap"),
         name=_text(value["name"], 1, 256),
         purpose=_text(value["purpose"]),
         triggers=_string_array(value["triggers"]),
@@ -372,21 +387,27 @@ def _validate_candidate(raw: Any) -> CapabilityCandidate:
         evaluation_scenarios=_string_array(value["evaluation_scenarios"]),
         recurrence_count=_integer(value["recurrence_count"], 1, 1_000_000),
         decision_impact=_enum(value["decision_impact"], IMPACTS),
-        evidence_ids=_identifier_array(value["evidence_ids"]),
+        evidence_ids=_identifier_array(value["evidence_ids"], prefix="ev"),
     )
 
 
 def _validate_model(raw: Any) -> CapabilityModel:
     value = _object(raw, {
-        "model_id", "selected_capability_id", "candidate_ids", "sections",
+        "model_id", "selected_capability_id", "selected_by", "candidate_ids",
+        "sections",
     })
+    if value["selected_by"] != "current-user":
+        _reject("invalid-claim-decision")
     sections = _object(value["sections"], set(SECTIONS))
     return CapabilityModel(
-        model_id=_identifier(value["model_id"]),
-        selected_capability_id=_identifier(value["selected_capability_id"]),
-        candidate_ids=_identifier_array(value["candidate_ids"]),
+        model_id=_identifier(value["model_id"], "model"),
+        selected_capability_id=_identifier(
+            value["selected_capability_id"], "cap"),
+        selected_by="current-user",
+        candidate_ids=_identifier_array(value["candidate_ids"], prefix="cap"),
         sections=MappingProxyType({
-            section: _identifier_array(sections[section]) for section in SECTIONS
+            section: _identifier_array(sections[section], prefix="cl")
+            for section in SECTIONS
         }),
     )
 
@@ -402,16 +423,17 @@ def _validate_question(raw: Any) -> CriticalQuestion:
         alternative = _object(raw_alternative, {
             "alternative_id", "label", "evidence_ids", "behavioral_impact",
         })
-        alternative_id = _identifier(alternative["alternative_id"])
+        alternative_id = _identifier(alternative["alternative_id"], "a")
         _unique(alternative_id, alternative_ids)
         alternatives.append(QuestionAlternative(
             alternative_id=alternative_id,
             label=_text(alternative["label"]),
-            evidence_ids=_identifier_array(alternative["evidence_ids"], 0),
+            evidence_ids=_identifier_array(
+                alternative["evidence_ids"], 0, "ev"),
             behavioral_impact=_enum(alternative["behavioral_impact"], IMPACTS),
         ))
-    question_evidence = _identifier_array(value["evidence_ids"])
-    recommendation = _optional_identifier(value["recommendation"])
+    question_evidence = _identifier_array(value["evidence_ids"], prefix="ev")
+    recommendation = _optional_identifier(value["recommendation"], "a")
     if recommendation is not None:
         matches = [item for item in alternatives if item.alternative_id == recommendation]
         if (not matches or not matches[0].evidence_ids
@@ -421,7 +443,7 @@ def _validate_question(raw: Any) -> CriticalQuestion:
     if behavioral_impact != "high":
         _reject("noncritical-question")
     return CriticalQuestion(
-        question_id=_identifier(value["question_id"]),
+        question_id=_identifier(value["question_id"], "q"),
         reason=_enum(value["reason"], QUESTION_REASONS),
         prompt=_text(value["prompt"]),
         alternatives=tuple(alternatives),
@@ -440,9 +462,9 @@ def _validate_uncertainty(raw: Any) -> Uncertainty:
     if impact == "high":
         _reject("critical-uncertainty")
     return Uncertainty(
-        uncertainty_id=_identifier(value["uncertainty_id"]),
+        uncertainty_id=_identifier(value["uncertainty_id"], "u"),
         summary=_text(value["summary"]),
-        evidence_ids=_identifier_array(value["evidence_ids"]),
+        evidence_ids=_identifier_array(value["evidence_ids"], prefix="ev"),
         behavioral_impact=impact,
     )
 
@@ -475,6 +497,27 @@ def _require_references(packet: KnowledgePacket) -> None:
     claims = {item.claim_id: item for item in packet.claims}
     decisions = {item.decision_id: item for item in packet.decisions}
     candidates = {item.capability_id: item for item in packet.candidates}
+
+    outward_identifiers = (
+        tuple(evidence)
+        + tuple(candidates)
+        + tuple(question.question_id for question in packet.questions)
+        + tuple(
+            alternative.alternative_id
+            for question in packet.questions
+            for alternative in question.alternatives
+        )
+    )
+    private_excerpts = tuple(item.excerpt for item in packet.evidence)
+    try:
+        identifier_leak = privacy.contains_private_fragment(
+            outward_identifiers, private_excerpts)
+    except privacy.PrivacyBudgetExceeded:
+        _reject("json-resource-limit")
+    if (identifier_leak or any(
+            privacy.contains_forbidden_marker(item)
+            for item in outward_identifiers)):
+        _reject("question-private-content")
 
     for claim in packet.claims:
         references = claim.support_evidence_ids + claim.contradiction_evidence_ids
@@ -516,6 +559,16 @@ def _require_references(packet: KnowledgePacket) -> None:
             references.extend(alternative.evidence_ids)
         if any(identifier not in evidence for identifier in references):
             _reject("unknown-evidence")
+        outward_text = (question.prompt,) + tuple(
+            item.label for item in question.alternatives)
+        try:
+            contains_private = privacy.contains_private_fragment(
+                outward_text, (item.excerpt for item in packet.evidence))
+        except privacy.PrivacyBudgetExceeded:
+            _reject("json-resource-limit")
+        if (privacy.contains_forbidden_marker("\n".join(outward_text))
+                or contains_private):
+            _reject("question-private-content")
     for uncertainty in packet.uncertainties:
         if any(identifier not in evidence for identifier in uncertainty.evidence_ids):
             _reject("unknown-evidence")
@@ -548,7 +601,9 @@ def validate_packet(raw: Any) -> KnowledgePacket:
     for item in candidates:
         _unique(item.capability_id, seen)
     seen.clear()
-    questions = tuple(_validate_question(item) for item in _array(value["questions"]))
+    questions = tuple(
+        _validate_question(item) for item in _array(value["questions"], 0, 12)
+    )
     for item in questions:
         _unique(item.question_id, seen)
     seen.clear()
