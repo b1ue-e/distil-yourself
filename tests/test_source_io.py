@@ -61,22 +61,27 @@ class SourceIOTest(unittest.TestCase):
         self.path.chmod(0o600)
         current_uid = os.geteuid()
         self.assertEqual(self.read(expected_owner_uid=current_uid, owner_only=True), b"abcdef")
+        descriptor_metadata = self.metadata(st_uid=current_uid + 1, st_mode=stat.S_IFREG | 0o600)
+        with mock.patch.object(os, "fstat", return_value=descriptor_metadata):
+            self.reject(lambda: self.read(expected_owner_uid=current_uid), "source-owner-mismatch")
         self.reject(lambda: self.read(expected_owner_uid=current_uid + 1), "source-owner-mismatch")
         self.path.chmod(0o640)
         self.reject(lambda: self.read(expected_owner_uid=current_uid, owner_only=True), "unsafe-source-file")
 
     def test_owner_policy_arguments_are_validated_before_open(self):
-        for expected_owner_uid in (True, -1, "0"):
-            with mock.patch.object(os, "open") as opened:
-                self.reject(lambda: source_io.read_source(str(self.path), expected_owner_uid=expected_owner_uid),
-                            "invalid-source-bound")
-                opened.assert_not_called()
-        with mock.patch.object(os, "open") as opened:
-            self.reject(lambda: source_io.read_source(str(self.path), owner_only=1), "invalid-source-bound")
-            opened.assert_not_called()
-        with mock.patch.object(os, "open") as opened:
-            self.reject(lambda: source_io.read_source(str(self.path), owner_only=True), "invalid-source-bound")
-            opened.assert_not_called()
+        cases = (
+            ("boolean owner UID", {"expected_owner_uid": True}),
+            ("negative owner UID", {"expected_owner_uid": -1}),
+            ("string owner UID", {"expected_owner_uid": "0"}),
+            ("integer owner-only", {"owner_only": 1}),
+            ("owner-only without UID", {"owner_only": True}),
+        )
+        for name, kwargs in cases:
+            with self.subTest(name=name):
+                with mock.patch.object(os, "open") as opened:
+                    self.reject(lambda kwargs=kwargs: source_io.read_source(str(self.path), **kwargs),
+                                "invalid-source-bound")
+                    opened.assert_not_called()
 
     def test_owner_change_during_read_is_rejected(self):
         current_uid = os.geteuid()
