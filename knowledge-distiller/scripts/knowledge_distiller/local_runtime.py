@@ -87,6 +87,8 @@ def _validate_runtime_inputs(
         raise LocalRuntimeError("local-identity-unavailable")
     if type(now) is not int or not 0 <= now <= 2**63 - 1:
         raise LocalRuntimeError("local-identity-unavailable")
+    if now + READ_WINDOW_SECONDS > 2**63 - 1:
+        raise LocalRuntimeError("local-identity-unavailable")
     if (
         type(request.derived_processing_until) is not int
         or request.derived_processing_until <= now
@@ -221,7 +223,10 @@ def _runtime_identity(request: LocalCodexRequest):
     try:
         effective_uid = os.geteuid()
         timestamp = time.time()
-        if type(timestamp) not in (int, float):
+        if (
+            type(timestamp) not in (int, float)
+            or not 0 <= timestamp <= 2**63 - 1
+        ):
             raise ValueError
         now = int(timestamp)
     except Exception:

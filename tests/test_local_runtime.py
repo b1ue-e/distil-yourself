@@ -454,6 +454,37 @@ class LocalRuntimeBoundaryTest(unittest.TestCase):
             self.assertEqual(caught.exception.code, "local-identity-unavailable")
             reader.assert_not_called()
 
+    def test_public_runtime_rejects_negative_fractional_time_before_key_read(self):
+        raw = encoded({**request_data(), "derived_processing_until": 2000})
+        with mock.patch.object(os, "geteuid", return_value=123), \
+                mock.patch.object(time, "time", return_value=-0.5), \
+                mock.patch.object(source_io, "read_source", return_value=b"k" * 32) as reader, \
+                mock.patch.object(ingestion, "ingest_source", return_value=object()):
+            with self.assertRaises(local_runtime.LocalRuntimeError) as caught:
+                local_runtime.ingest_codex_session(
+                    "/PRIVATE/task", raw, "/PRIVATE/key"
+                )
+
+        self.assertEqual(caught.exception.code, "local-identity-unavailable")
+        reader.assert_not_called()
+
+    def test_public_runtime_rejects_clock_that_cannot_fit_grant_expiry_before_key_read(self):
+        raw = encoded({
+            **request_data(),
+            "derived_processing_until": 2**63 - 1,
+        })
+        with mock.patch.object(os, "geteuid", return_value=123), \
+                mock.patch.object(time, "time", return_value=2**63 - 2), \
+                mock.patch.object(source_io, "read_source", return_value=b"k" * 32) as reader, \
+                mock.patch.object(ingestion, "ingest_source", return_value=object()):
+            with self.assertRaises(local_runtime.LocalRuntimeError) as caught:
+                local_runtime.ingest_codex_session(
+                    "/PRIVATE/task", raw, "/PRIVATE/key"
+                )
+
+        self.assertEqual(caught.exception.code, "local-identity-unavailable")
+        reader.assert_not_called()
+
     def test_public_runtime_rejects_invalid_deadline_before_key_read(self):
         for deadline in (999, 1000, 1000 + local_runtime.MAX_DERIVED_SECONDS + 1):
             data = {**request_data(), "derived_processing_until": deadline}
@@ -473,7 +504,7 @@ class LocalRuntimeBoundaryTest(unittest.TestCase):
         key = b"k" * 32
         expected = object()
         with mock.patch.object(os, "geteuid", return_value=123), \
-                mock.patch.object(time, "time", return_value=1000), \
+                mock.patch.object(time, "time", return_value=1000.75), \
                 mock.patch.object(source_io, "read_source", return_value=key), \
                 mock.patch.object(ingestion, "ingest_source", return_value=expected) as ingest:
             result = local_runtime.ingest_codex_session(
@@ -485,6 +516,7 @@ class LocalRuntimeBoundaryTest(unittest.TestCase):
         task_root, materialized_request = ingest.call_args.args
         self.assertEqual(task_root, Path("/PRIVATE/task"))
         self.assertEqual(materialized_request.source_kind, "codex")
+        self.assertEqual(materialized_request.authorization_context.now, 1000)
         self.assertEqual(ingest.call_args.kwargs["redaction_key"], key)
         dispatch = ingest.call_args.kwargs["acquire"]
         grant = authorization.validate_content_grant(
