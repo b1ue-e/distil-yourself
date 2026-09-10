@@ -396,9 +396,10 @@ class CliTest(unittest.TestCase):
             self.assertEqual(ingestion_payload["status"], "snapshotted")
             self.assertEqual(ingestion_payload["source_kind"], "session")
             self.assertEqual(ingestion_payload["source_byte_count"], len(raw_session))
-            self.assertEqual(inspect_task(task).state.phase, Phase.INGEST)
+            snapshot = inspect_task(task)
+            self.assertEqual(snapshot.state.phase, Phase.INGEST)
             self.assertEqual(
-                inspect_task(task).generation_id, ingestion_payload["generation_id"])
+                snapshot.generation_id, ingestion_payload["generation_id"])
             self.assertNotEqual(
                 granted.generation_id, ingestion_payload["generation_id"])
             for private in (
@@ -417,6 +418,22 @@ class CliTest(unittest.TestCase):
                 kd_cli._read_event_graph("exact.json")
         self.assertEqual(caught.exception.reason, "input-changed")
 
+    def test_run_cli_bounds_subprocess_execution(self) -> None:
+        completed = object()
+        with mock.patch.object(
+                subprocess, "run", return_value=completed) as run:
+            result = self.run_cli("task-inspect", "task")
+
+        self.assertIs(result, completed)
+        run.assert_called_once_with(
+            [sys.executable, str(CLI), "task-inspect", "task"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+
     def run_cli(self, *arguments: str) -> subprocess.CompletedProcess:
         return subprocess.run(
             [sys.executable, str(CLI), *arguments],
@@ -424,6 +441,7 @@ class CliTest(unittest.TestCase):
             capture_output=True,
             text=True,
             check=False,
+            timeout=30,
         )
 
     def event_graph_arguments(self, path: Path, **overrides: str):
