@@ -627,7 +627,7 @@ Completion result: decoder implementation and boundary hardening are in `98d0310
 - Modify: `knowledge-distiller/scripts/knowledge_distiller/local_runtime.py`
 - Modify: `tests/test_local_runtime.py`
 
-- [ ] **Step 1: Write failing identity, authorization, and key tests**
+- [x] **Step 1: Write failing identity, authorization, and key tests**
 
 Extend imports in `tests/test_local_runtime.py` with:
 
@@ -757,13 +757,13 @@ def test_unexpected_runtime_failure_collapses_without_private_detail(self):
 
 The newline case intentionally proves there is no trimming: 31 key bytes plus one newline is accepted as a distinct 32-byte key.
 
-- [ ] **Step 2: Run the new runtime tests red**
+- [x] **Step 2: Run the new runtime tests red**
 
 Run: `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest tests.test_local_runtime -v`
 
 Expected: FAIL because materialization and orchestration are absent.
 
-- [ ] **Step 3: Implement opaque derivation and authorization materialization**
+- [x] **Step 3: Implement opaque derivation and authorization materialization**
 
 Extend the imports in `local_runtime.py` before appending the types and helpers:
 
@@ -903,7 +903,7 @@ def materialize_local_codex_request(
 
 The record decision digest intentionally uses the exact canonical JSON encoding already accepted by `authorization.py`; record IDs additionally domain-separate content grant and authority attestation.
 
-- [ ] **Step 4: Implement secret read and shared transaction delegation**
+- [x] **Step 4: Implement secret read and shared transaction delegation**
 
 Append these functions to `local_runtime.py`:
 
@@ -970,7 +970,7 @@ def ingest_codex_session(
 
 Do not retain the key on a dataclass or return it. The outer wrapper passes `ingestion.IngestionError` through unchanged so it remains an ingestion rejection, and collapses every other unexpected exception to the code-only `local-runtime-failed` input error.
 
-- [ ] **Step 5: Add the synthetic vertical runtime test**
+- [x] **Step 5: Add the synthetic vertical runtime test**
 
 Add this helper and test to `LocalRuntimeTest`:
 
@@ -1032,18 +1032,27 @@ def test_standalone_runtime_ingests_only_the_synthetic_closed_prefix(self):
 
 Import `pwd` and `subprocess` at the top of the test file. This test uses only the checked-in synthetic fixture copied to a temporary file.
 
-- [ ] **Step 6: Run runtime and shared-core tests green**
+- [x] **Step 6: Run runtime and shared-core tests green**
 
 Run: `PYTHONDONTWRITEBYTECODE=1 python3 -W error::ResourceWarning -m unittest tests.test_local_runtime tests.test_source_io tests.test_brokers tests.test_ingestion -v`
 
 Expected: PASS with no directory enumeration, username lookup, process execution, network access, or real Codex session read.
 
-- [ ] **Step 7: Commit the runtime**
+- [x] **Step 7: Commit the runtime**
 
 ```bash
 git add knowledge-distiller/scripts/knowledge_distiller/local_runtime.py tests/test_local_runtime.py
 git commit -m "feat: add standalone local Codex runtime"
 ```
+
+Completion result: the standalone runtime and clock-boundary hardening are in
+`fe555f0` and `55df6e1`. Specification review passed. Quality/security review
+found two minor trusted-clock boundary cases; both were fixed test-first and the
+re-review returned `Ready: Yes` with no remaining findings. The local runtime
+suite passed 25/25 and the runtime/source-I/O/broker/ingestion suites passed
+84/84. The synthetic vertical transaction proved prefix-only ingestion,
+failure atomicity, and persisted-secret exclusion without reading real Codex or
+Lark data. The simplification review found no material production redundancy.
 
 ### Task 5: Expose the standalone command and prove the real CLI boundary
 
