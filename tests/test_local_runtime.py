@@ -1,16 +1,26 @@
 import hashlib
 import json
+import os
 from pathlib import Path
+import subprocess
 import sys
+import tempfile
+import time
 import unittest
-from dataclasses import MISSING, FrozenInstanceError, fields
+from dataclasses import MISSING, FrozenInstanceError, asdict, fields
 from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "knowledge-distiller" / "scripts"))
 
-from knowledge_distiller import adapters, ingestion, local_runtime
+from knowledge_distiller import (
+    adapters, authorization, brokers, ingestion, local_runtime, native_adapters,
+    source_io,
+)
+from knowledge_distiller.journal import canonical_json
+from knowledge_distiller.persistence import TaskCoordinator, create_task, inspect_task
+from knowledge_distiller.state import Event, Phase, TransitionFacts
 
 
 def digest(raw=b"pinned Codex session prefix"):
@@ -282,6 +292,387 @@ class LocalRuntimeDecoderTest(unittest.TestCase):
                 side_effect=control_flow,
             ), self.assertRaises(type(control_flow)):
                 local_runtime.decode_local_codex_request(encoded())
+
+
+class LocalRuntimeMaterializationTest(unittest.TestCase):
+    def test_materializes_exact_trusted_codex_request_deterministically(self):
+        request = local_runtime.LocalCodexRequest(
+            **{**request_data(), "derived_processing_until": 2000}
+        )
+        key = b"s" * 32
+
+        first = local_runtime.materialize_local_codex_request(
+            "/synthetic/private-task", request,
+            selector_key=key, effective_uid=123, now=1000,
+        )
+        second = local_runtime.materialize_local_codex_request(
+            "/synthetic/private-task", request,
+            selector_key=key, effective_uid=123, now=1000,
+        )
+
+        self.assertEqual(first, second)
+        self.assertEqual(
+            tuple(item.name for item in fields(local_runtime.MaterializedCodexRequest)),
+            ("request", "identity"),
+        )
+        self.assertNotIn("session-私密.jsonl", repr(first))
+        self.assertNotIn(key.hex(), repr(first))
+        self.assertEqual(first.request.source_kind, "codex")
+        self.assertEqual(first.request.transaction_id, "transaction-1")
+        self.assertEqual(first.request.expected_generation_id, "generation-1")
+        self.assertEqual(first.request.native_locator_id, "project-1")
+        self.assertEqual(
+            first.request.native_request,
+            brokers.SessionRequest(
+                request.session_path, request.project_id,
+                request.prefix_length, request.prefix_digest,
+            ),
+        )
+        context = first.request.authorization_context
+        self.assertEqual(
+            context.selector,
+            brokers.session_selector_commitment(request.session_path, key),
+        )
+        self.assertEqual(context.purpose, "distill-knowledge")
+        self.assertIsNone(context.revision)
+        self.assertEqual(context.session_range, authorization.SessionRange(0, 127))
+        self.assertEqual(context.now, 1000)
+        self.assertIs(context.task_active, True)
+        self.assertEqual(
+            context.authenticated_issuers,
+            (context.active_principal, local_runtime.LOCAL_OWNER_VERIFIER),
+        )
+        self.assertEqual(context.content_owner, context.active_principal)
+        self.assertEqual(first.identity.active_principal, context.active_principal)
+        self.assertEqual(first.identity.tenant_account, context.tenant_account)
+        self.assertEqual(first.identity.project_id, "project-1")
+        self.assertEqual(first.identity.content_owner, context.active_principal)
+        self.assertEqual(
+            first.identity.product_version,
+            native_adapters.CODEX_ROLLOUT_ADAPTER.product_version,
+        )
+        self.assertEqual(
+            first.identity.native_schema_digest,
+            native_adapters.CODEX_NATIVE_SCHEMA_DIGEST,
+        )
+        self.assertEqual(first.identity.expected_owner_uid, 123)
+        self.assertIs(first.identity.selector_key, key)
+
+        grant = authorization.validate_content_grant(
+            first.request.content_grant, context=context,
+        )
+        attestation = authorization.validate_authority_attestation(
+            first.request.authority_attestation, context=context,
+        )
+        self.assertEqual((grant.issued_at, grant.expires_at), (1000, 1300))
+        self.assertEqual(grant.derived_processing_until, 2000)
+        self.assertEqual(grant.issuer, context.active_principal)
+        self.assertEqual(attestation.issuer, local_runtime.LOCAL_OWNER_VERIFIER)
+        self.assertEqual(attestation.operation, "process-third-party")
+        self.assertEqual(attestation.authority_basis, "verified-ownership")
+        self.assertEqual(attestation.content_owner, context.active_principal)
+        auth_json = json.dumps(
+            {
+                "context": asdict(context),
+                "grant": first.request.content_grant,
+                "attestation": first.request.authority_attestation,
+            },
+            sort_keys=True,
+        )
+        self.assertNotIn("/synthetic/private-task", auth_json)
+        self.assertNotIn(request.session_path, auth_json)
+        for opaque in (
+            context.task_id, context.active_principal, context.tenant_account,
+            grant.record_id, attestation.record_id,
+        ):
+            self.assertRegex(opaque, r"^sha256:[0-9a-f]{64}$")
+
+
+class LocalRuntimeBoundaryTest(unittest.TestCase):
+    def test_redaction_key_reader_uses_exact_owner_only_policy_and_preserves_bytes(self):
+        key = b"k" * 31 + b"\n"
+        with mock.patch.object(source_io, "read_source", return_value=key) as reader:
+            result = local_runtime._read_redaction_key("/PRIVATE/key", 123)
+
+        self.assertIs(result, key)
+        reader.assert_called_once_with(
+            "/PRIVATE/key", max_bytes=64,
+            expected_owner_uid=123, owner_only=True,
+        )
+
+    def test_redaction_key_reader_maps_source_errors_and_rejects_bad_lengths(self):
+        private = "/PRIVATE/redaction-key"
+        for failure in (
+            source_io.SourceIOError("PRIVATE-SOURCE-DETAIL"),
+            b"k" * 31,
+            b"k" * 65,
+        ):
+            with self.subTest(failure=type(failure).__name__), mock.patch.object(
+                source_io,
+                "read_source",
+                side_effect=failure if isinstance(failure, Exception) else None,
+                return_value=None if isinstance(failure, Exception) else failure,
+            ):
+                with self.assertRaises(local_runtime.LocalRuntimeError) as caught:
+                    local_runtime._read_redaction_key(private, 123)
+            self.assertEqual(caught.exception.code, "unsafe-redaction-key")
+            self.assertNotIn(private, str(caught.exception))
+            self.assertNotIn("PRIVATE-SOURCE-DETAIL", str(caught.exception))
+
+    def test_public_runtime_decodes_before_identity_and_key_access(self):
+        with mock.patch.object(os, "geteuid", side_effect=AssertionError("identity accessed")), \
+                mock.patch.object(source_io, "read_source") as reader:
+            with self.assertRaises(local_runtime.LocalRuntimeError) as caught:
+                local_runtime.ingest_codex_session(
+                    "/PRIVATE/task", b"not-json", "/PRIVATE/key"
+                )
+
+        self.assertEqual(caught.exception.code, "invalid-local-request")
+        reader.assert_not_called()
+
+    def test_public_runtime_rejects_untrusted_uid_and_time_before_key_read(self):
+        bad_runtime_values = (
+            (False, 1000),
+            (-1, 1000),
+            (2**63, 1000),
+            (123, False),
+            (123, float("nan")),
+            (123, float("inf")),
+            (123, 1e100),
+            (123, object()),
+        )
+        raw = encoded({**request_data(), "derived_processing_until": 2000})
+        for uid, timestamp in bad_runtime_values:
+            with self.subTest(uid=uid, timestamp=timestamp), \
+                    mock.patch.object(os, "geteuid", return_value=uid), \
+                    mock.patch.object(time, "time", return_value=timestamp), \
+                    mock.patch.object(source_io, "read_source") as reader:
+                with self.assertRaises(local_runtime.LocalRuntimeError) as caught:
+                    local_runtime.ingest_codex_session(
+                        "/PRIVATE/task", raw, "/PRIVATE/key"
+                    )
+            self.assertEqual(caught.exception.code, "local-identity-unavailable")
+            reader.assert_not_called()
+
+    def test_public_runtime_rejects_invalid_deadline_before_key_read(self):
+        for deadline in (999, 1000, 1000 + local_runtime.MAX_DERIVED_SECONDS + 1):
+            data = {**request_data(), "derived_processing_until": deadline}
+            with self.subTest(deadline=deadline), \
+                    mock.patch.object(os, "geteuid", return_value=123), \
+                    mock.patch.object(time, "time", return_value=1000), \
+                    mock.patch.object(source_io, "read_source") as reader:
+                with self.assertRaises(local_runtime.LocalRuntimeError) as caught:
+                    local_runtime.ingest_codex_session(
+                        "/PRIVATE/task", encoded(data), "/PRIVATE/key"
+                    )
+            self.assertEqual(caught.exception.code, "invalid-derived-deadline")
+            reader.assert_not_called()
+
+    def test_public_runtime_delegates_once_with_generated_identity(self):
+        raw = encoded({**request_data(), "derived_processing_until": 2000})
+        key = b"k" * 32
+        expected = object()
+        with mock.patch.object(os, "geteuid", return_value=123), \
+                mock.patch.object(time, "time", return_value=1000), \
+                mock.patch.object(source_io, "read_source", return_value=key), \
+                mock.patch.object(ingestion, "ingest_source", return_value=expected) as ingest:
+            result = local_runtime.ingest_codex_session(
+                "/PRIVATE/task", raw, "/PRIVATE/key"
+            )
+
+        self.assertIs(result, expected)
+        ingest.assert_called_once()
+        task_root, materialized_request = ingest.call_args.args
+        self.assertEqual(task_root, Path("/PRIVATE/task"))
+        self.assertEqual(materialized_request.source_kind, "codex")
+        self.assertEqual(ingest.call_args.kwargs["redaction_key"], key)
+        dispatch = ingest.call_args.kwargs["acquire"]
+        grant = authorization.validate_content_grant(
+            materialized_request.content_grant,
+            context=materialized_request.authorization_context,
+        )
+        attestation = authorization.validate_authority_attestation(
+            materialized_request.authority_attestation,
+            context=materialized_request.authorization_context,
+        )
+        with mock.patch.object(
+            brokers, "read_local_session", return_value=object()
+        ) as acquire:
+            acquired = dispatch.codex(
+                materialized_request.native_request,
+                grant,
+                attestation,
+                materialized_request.authorization_context,
+            )
+        self.assertIsNotNone(acquired)
+        self.assertEqual(acquire.call_count, 1)
+        self.assertEqual(acquire.call_args.args, (materialized_request.native_request,))
+        self.assertEqual(acquire.call_args.kwargs["grant"], grant)
+        self.assertEqual(acquire.call_args.kwargs["attestation"], attestation)
+        self.assertEqual(
+            acquire.call_args.kwargs["context"],
+            materialized_request.authorization_context,
+        )
+        identity = acquire.call_args.kwargs["identity"]
+        self.assertEqual(identity.expected_owner_uid, 123)
+        self.assertIs(identity.selector_key, key)
+        with self.assertRaises(ingestion.IngestionError):
+            dispatch.lark(None, None, None, None)
+
+    def test_public_runtime_preserves_bounded_errors_and_collapses_unexpected(self):
+        for failure in (
+            local_runtime.LocalRuntimeError("unsafe-redaction-key"),
+            ingestion.IngestionError("generation-lineage-mismatch"),
+        ):
+            with self.subTest(code=failure.code), mock.patch.object(
+                local_runtime, "_ingest_codex_session", side_effect=failure,
+            ):
+                with self.assertRaises(type(failure)) as caught:
+                    local_runtime.ingest_codex_session(
+                        "/PRIVATE/task", encoded(), "/PRIVATE/key"
+                    )
+            self.assertIs(caught.exception, failure)
+
+        private = "PRIVATE-INNER-DETAIL"
+        with mock.patch.object(
+            local_runtime, "_ingest_codex_session",
+            side_effect=ValueError(private),
+        ):
+            with self.assertRaises(local_runtime.LocalRuntimeError) as caught:
+                local_runtime.ingest_codex_session(
+                    "/PRIVATE/task", encoded(), "/PRIVATE/key"
+                )
+        self.assertEqual(caught.exception.code, "local-runtime-failed")
+        self.assertNotIn(private, str(caught.exception))
+
+        with mock.patch.object(
+            local_runtime, "_ingest_codex_session", side_effect=KeyboardInterrupt(),
+        ), self.assertRaises(KeyboardInterrupt):
+            local_runtime.ingest_codex_session(
+                "/PRIVATE/task", encoded(), "/PRIVATE/key"
+            )
+
+    def test_actual_key_file_safety_uses_shared_descriptor_reader(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            key_path = root / "key"
+            key = b"k" * 31 + b"\n"
+            key_path.write_bytes(key)
+            key_path.chmod(0o600)
+            self.assertEqual(
+                local_runtime._read_redaction_key(str(key_path), os.geteuid()),
+                key,
+            )
+
+            key_path.chmod(0o640)
+            with self.assertRaises(local_runtime.LocalRuntimeError) as caught:
+                local_runtime._read_redaction_key(str(key_path), os.geteuid())
+            self.assertEqual(caught.exception.code, "unsafe-redaction-key")
+
+            key_path.chmod(0o600)
+            symlink = root / "symlink"
+            symlink.symlink_to(key_path)
+            with self.assertRaises(local_runtime.LocalRuntimeError) as caught:
+                local_runtime._read_redaction_key(str(symlink), os.geteuid())
+            self.assertEqual(caught.exception.code, "unsafe-redaction-key")
+
+            hardlink = root / "hardlink"
+            os.link(key_path, hardlink)
+            with self.assertRaises(local_runtime.LocalRuntimeError) as caught:
+                local_runtime._read_redaction_key(str(key_path), os.geteuid())
+            self.assertEqual(caught.exception.code, "unsafe-redaction-key")
+
+
+class LocalRuntimeTransactionTest(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        private_root = Path(self.directory.name).resolve()
+        self.root = private_root / "task"
+        create_task(self.root)
+        with TaskCoordinator(self.root) as coordinator:
+            coordinator.transition(
+                Event.START_DISTILL,
+                TransitionFacts(selected_capability=True),
+            )
+            self.ingest_state = coordinator.transition(
+                Event.CONTENT_GRANTED,
+                TransitionFacts(content_grant=True, authority_valid=True),
+            )
+        self.fixture = (
+            ROOT / "tests/fixtures/adapters/codex/0.153.0/"
+            "rollout-jsonl-v1/redacted-current.jsonl"
+        ).read_bytes()
+        self.later = b"LATER-BYTES-NOT-IN-PREFIX"
+        self.session = private_root / "private-session.jsonl"
+        self.session.write_bytes(self.fixture + self.later)
+        self.key = b"k" * 32
+        self.key_path = private_root / "private-key"
+        self.key_path.write_bytes(self.key)
+        self.key_path.chmod(0o600)
+
+    def raw_request(self, generation_id=None, prefix_digest=None):
+        request = local_runtime.LocalCodexRequest(
+            schema_version=local_runtime.REQUEST_SCHEMA,
+            transaction_id="local-ingestion",
+            expected_generation_id=(
+                self.ingest_state.generation_id
+                if generation_id is None else generation_id
+            ),
+            session_path=str(self.session),
+            project_id="project-1",
+            prefix_length=len(self.fixture),
+            prefix_digest=digest(self.fixture) if prefix_digest is None else prefix_digest,
+            derived_processing_until=2000,
+        )
+        return canonical_json(asdict(request))
+
+    def test_ingests_only_pinned_synthetic_prefix_through_shared_transaction(self):
+        with mock.patch.object(time, "time", return_value=1000), \
+                mock.patch("pwd.getpwuid", side_effect=AssertionError("username lookup")), \
+                mock.patch.object(
+                    subprocess, "Popen", side_effect=AssertionError("process launch")
+                ):
+            result = local_runtime.ingest_codex_session(
+                self.root, self.raw_request(), str(self.key_path)
+            )
+
+        current = inspect_task(self.root)
+        self.assertEqual(result.status, "snapshotted")
+        self.assertEqual(result.source_kind, "session")
+        self.assertEqual(result.source_byte_count, len(self.fixture))
+        self.assertNotEqual(result.generation_id, self.ingest_state.generation_id)
+        self.assertEqual(current.generation_id, result.generation_id)
+        self.assertIs(current.state.phase, Phase.INGEST)
+        self.assertEqual(self.session.read_bytes(), self.fixture + self.later)
+        persisted = b"".join(
+            path.read_bytes() for path in self.root.rglob("*") if path.is_file()
+        )
+        for private in (
+            str(self.session).encode("utf-8"),
+            str(self.key_path).encode("utf-8"),
+            self.key,
+            self.later,
+        ):
+            self.assertNotIn(private, persisted)
+
+    def test_stale_generation_and_changed_prefix_do_not_commit(self):
+        failures = (
+            (self.raw_request(generation_id="stale-generation"),
+             "generation-lineage-mismatch"),
+            (self.raw_request(prefix_digest=digest(b"different-prefix")),
+             "acquisition-failed"),
+        )
+        for raw, expected_code in failures:
+            with self.subTest(code=expected_code), \
+                    mock.patch.object(time, "time", return_value=1000):
+                before = inspect_task(self.root).generation_id
+                with self.assertRaises(ingestion.IngestionError) as caught:
+                    local_runtime.ingest_codex_session(
+                        self.root, raw, str(self.key_path)
+                    )
+            self.assertEqual(caught.exception.code, expected_code)
+            self.assertEqual(inspect_task(self.root).generation_id, before)
 
 
 if __name__ == "__main__":
