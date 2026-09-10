@@ -416,7 +416,7 @@ Completion result: implementation and review fixes are in `0b3ea4a`, `b830331`, 
 - Create: `knowledge-distiller/scripts/knowledge_distiller/local_runtime.py`
 - Create: `tests/test_local_runtime.py`
 
-- [ ] **Step 1: Write failing decoder tests**
+- [x] **Step 1: Write failing decoder tests**
 
 Create `tests/test_local_runtime.py` with the imports and decoder fixture below:
 
@@ -510,13 +510,13 @@ class LocalRuntimeTest(unittest.TestCase):
                 self.reject_request(raw)
 ```
 
-- [ ] **Step 2: Run the decoder test red**
+- [x] **Step 2: Run the decoder test red**
 
 Run: `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest tests.test_local_runtime.LocalRuntimeTest.test_request_decoder_accepts_only_the_closed_contract -v`
 
 Expected: FAIL because `knowledge_distiller.local_runtime` does not exist.
 
-- [ ] **Step 3: Implement the closed decoder and public types**
+- [x] **Step 3: Implement the closed decoder and public types**
 
 Create `knowledge-distiller/scripts/knowledge_distiller/local_runtime.py` with this initial content:
 
@@ -605,18 +605,20 @@ def decode_local_codex_request(raw: bytes) -> LocalCodexRequest:
 
 Keep imports needed by Task 4 in place so the next task adds orchestration without moving responsibilities.
 
-- [ ] **Step 4: Run decoder tests green**
+- [x] **Step 4: Run decoder tests green**
 
 Run: `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest tests.test_local_runtime.LocalRuntimeTest.test_request_decoder_accepts_only_the_closed_contract -v`
 
 Expected: PASS. Diagnostics contain only `invalid-local-request`, never a decoded field or path.
 
-- [ ] **Step 5: Commit the decoder**
+- [x] **Step 5: Commit the decoder**
 
 ```bash
 git add knowledge-distiller/scripts/knowledge_distiller/local_runtime.py tests/test_local_runtime.py
 git commit -m "feat: decode standalone Codex ingestion requests"
 ```
+
+Completion result: decoder implementation and boundary hardening are in `98d0310` and `9ffbd98`. Specification review passed and quality/security review returned `READY` with no findings. The decoder suite passed 12/12, related adapter/authorization tests passed 60/60, and the full repository passed 404/404. Two thousand randomized malformed inputs produced no unexpected exception or private diagnostic; no redundant or dead decoder code was found.
 
 ### Task 4: Derive local authorization and run the shared ingestion transaction
 
