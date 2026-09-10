@@ -6,6 +6,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import time
 from types import SimpleNamespace
 import unittest
 from pathlib import Path
@@ -17,9 +18,15 @@ CLI = ROOT / "knowledge-distiller" / "scripts" / "kd.py"
 sys.path.insert(0, str(ROOT / "knowledge-distiller" / "scripts"))
 
 import kd as kd_cli  # noqa: E402
-from knowledge_distiller import artifacts, adapters, compiler, ingestion, knowledge  # noqa: E402
+from knowledge_distiller import (  # noqa: E402
+    artifacts, adapters, compiler, ingestion, knowledge, local_runtime,
+)
+from knowledge_distiller.journal import canonical_json  # noqa: E402
 from knowledge_distiller import source_io  # noqa: E402
-from knowledge_distiller.persistence import TaskCoordinator, create_task  # noqa: E402
+from knowledge_distiller.persistence import (  # noqa: E402
+    TaskCoordinator, create_task, inspect_task,
+)
+from knowledge_distiller.state import Event, Phase, TransitionFacts  # noqa: E402
 
 
 class CliTest(unittest.TestCase):
@@ -246,6 +253,160 @@ class CliTest(unittest.TestCase):
         self.assertEqual(json.loads(unsafe_stderr.getvalue())["error"]["reason"],
                          "ingestion-failed")
         self.assertNotIn("UNSAFE-RAW-SECRET", unsafe_stderr.getvalue())
+
+    def test_ingest_codex_session_requires_all_arguments_before_read(self) -> None:
+        cases = (
+            ("ingest-codex-session",),
+            ("ingest-codex-session", "task"),
+            ("ingest-codex-session", "task", "request.json"),
+        )
+        for arguments in cases:
+            with self.subTest(arguments=arguments), mock.patch.object(
+                    source_io, "read_source") as reader, mock.patch.object(
+                    kd_cli.sys, "stderr", io.StringIO()) as stderr:
+                code = kd_cli.main(arguments)
+
+            self.assertEqual(code, 2)
+            self.assertEqual(json.loads(stderr.getvalue())["error"], {
+                "code": "invalid-input", "reason": "invalid-arguments"})
+            reader.assert_not_called()
+
+    def test_ingest_codex_session_reads_bounded_request_and_delegates(self) -> None:
+        result = ingestion.IngestionResult(
+            status="snapshotted", source_kind="session",
+            source_snapshot_id="sha256:" + "a" * 64,
+            canonical_digest="sha256:" + "b" * 64,
+            source_byte_count=100, source_item_count=2,
+            generation_id="g-synthetic", manifest_digest="c" * 64)
+        with mock.patch.object(
+                source_io, "read_source", return_value=b"synthetic-request") as read, \
+                mock.patch.object(
+                    local_runtime, "ingest_codex_session", return_value=result
+                ) as ingest:
+            payload = kd_cli._run((
+                "ingest-codex-session", "task-root", "private-request.json",
+                "--redaction-key-file", "private-key",
+            ))
+
+        read.assert_called_once_with(
+            "private-request.json", max_bytes=local_runtime.MAX_LOCAL_REQUEST_BYTES)
+        ingest.assert_called_once_with(
+            Path("task-root"), b"synthetic-request", "private-key")
+        self.assertEqual(payload, {"ok": True, "ingestion": {
+            "status": "snapshotted", "source_kind": "session",
+            "source_snapshot_id": "sha256:" + "a" * 64,
+            "canonical_digest": "sha256:" + "b" * 64,
+            "source_byte_count": 100, "source_item_count": 2,
+            "generation_id": "g-synthetic", "manifest_digest": "c" * 64}})
+
+        with mock.patch.object(
+                source_io, "read_source",
+                side_effect=source_io.SourceIOError("input-changed")):
+            with self.assertRaises(kd_cli.CliInputError) as caught:
+                kd_cli._read_local_codex_request("PRIVATE-request.json")
+        self.assertEqual(caught.exception.reason, "input-changed")
+        self.assertNotIn("PRIVATE", str(caught.exception))
+
+    def test_ingest_codex_session_maps_code_only_runtime_failures(self) -> None:
+        private = "PRIVATE-LOCAL-MATERIAL"
+        failures = (
+            (
+                local_runtime.LocalRuntimeError(private),
+                2,
+                {"code": "invalid-input", "reason": "invalid-local-request"},
+            ),
+            (
+                ingestion.IngestionError(private),
+                3,
+                {"code": "source-ingestion-rejected", "reason": "ingestion-failed"},
+            ),
+        )
+        for failure, expected_code, expected_error in failures:
+            with self.subTest(expected_code=expected_code), mock.patch.object(
+                    source_io, "read_source", return_value=private.encode()), \
+                    mock.patch.object(
+                        local_runtime, "ingest_codex_session", side_effect=failure
+                    ), mock.patch.object(
+                        kd_cli.sys, "stdout", io.StringIO()) as stdout, \
+                    mock.patch.object(
+                        kd_cli.sys, "stderr", io.StringIO()) as stderr:
+                code = kd_cli.main((
+                    "ingest-codex-session", private + "-task",
+                    private + "-request.json", "--redaction-key-file",
+                    private + "-key",
+                ))
+
+            self.assertEqual(code, expected_code)
+            self.assertEqual(stdout.getvalue(), "")
+            self.assertEqual(json.loads(stderr.getvalue())["error"], expected_error)
+            self.assertNotIn(private, stderr.getvalue())
+
+    def test_ingest_codex_session_subprocess_accepts_synthetic_fixture(self) -> None:
+        fixture = (
+            ROOT / "tests/fixtures/adapters/codex/0.153.0/"
+            "rollout-jsonl-v1/redacted-current.jsonl"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            private_root = Path(directory).resolve()
+            task = private_root / "task"
+            create_task(task)
+            with TaskCoordinator(task) as coordinator:
+                coordinator.transition(
+                    Event.START_DISTILL,
+                    TransitionFacts(selected_capability=True),
+                )
+                granted = coordinator.transition(
+                    Event.CONTENT_GRANTED,
+                    TransitionFacts(content_grant=True, authority_valid=True),
+                )
+            session = private_root / "private-session.jsonl"
+            raw_session = fixture.read_bytes()
+            session.write_bytes(raw_session)
+            key = b"k" * 32
+            key_path = private_root / "private-key"
+            key_path.write_bytes(key)
+            key_path.chmod(0o600)
+            request_path = private_root / "private-request.json"
+            request_path.write_bytes(canonical_json({
+                "schema_version": local_runtime.REQUEST_SCHEMA,
+                "transaction_id": "cli-local-ingestion",
+                "expected_generation_id": granted.generation_id,
+                "session_path": str(session),
+                "project_id": "project-1",
+                "prefix_length": len(raw_session),
+                "prefix_digest": "sha256:" + hashlib.sha256(raw_session).hexdigest(),
+                "derived_processing_until": int(time.time()) + 3600,
+            }))
+
+            result = self.run_cli(
+                "ingest-codex-session", str(task), str(request_path),
+                "--redaction-key-file", str(key_path),
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stderr, "")
+            payload = json.loads(result.stdout)
+            self.assertTrue(payload["ok"])
+            ingestion_payload = payload["ingestion"]
+            self.assertEqual(set(ingestion_payload), {
+                "status", "source_kind", "source_snapshot_id",
+                "canonical_digest", "source_byte_count", "source_item_count",
+                "generation_id", "manifest_digest",
+            })
+            self.assertEqual(ingestion_payload["status"], "snapshotted")
+            self.assertEqual(ingestion_payload["source_kind"], "session")
+            self.assertEqual(ingestion_payload["source_byte_count"], len(raw_session))
+            self.assertEqual(inspect_task(task).state.phase, Phase.INGEST)
+            self.assertEqual(
+                inspect_task(task).generation_id, ingestion_payload["generation_id"])
+            self.assertNotEqual(
+                granted.generation_id, ingestion_payload["generation_id"])
+            for private in (
+                str(session), str(request_path), str(key_path), "project-1",
+                key.decode("ascii"),
+            ):
+                self.assertNotIn(private, result.stdout)
+                self.assertNotIn(private, result.stderr)
 
     def test_event_graph_delegates_to_shared_source_boundary(self) -> None:
         with mock.patch.object(source_io, "read_source", return_value=b"{}") as reader:
