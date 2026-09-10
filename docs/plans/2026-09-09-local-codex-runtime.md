@@ -1061,7 +1061,7 @@ Lark data. The simplification review found no material production redundancy.
 - Modify: `knowledge-distiller/scripts/kd.py` (imports, parser, `_run`, `main`)
 - Modify: `tests/test_cli.py` (`CliTest`)
 
-- [ ] **Step 1: Write failing parser and delegation tests**
+- [x] **Step 1: Write failing parser and delegation tests**
 
 Import `local_runtime` in `tests/test_cli.py`, then add:
 
@@ -1108,13 +1108,13 @@ def test_ingest_codex_session_delegates_and_emits_bounded_result(self):
     }})
 ```
 
-- [ ] **Step 2: Run the CLI tests red**
+- [x] **Step 2: Run the CLI tests red**
 
 Run: `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest tests.test_cli.CliTest.test_ingest_codex_session_requires_all_arguments_before_request_read tests.test_cli.CliTest.test_ingest_codex_session_delegates_and_emits_bounded_result -v`
 
 Expected: FAIL because the parser does not know `ingest-codex-session`.
 
-- [ ] **Step 3: Implement parser, delegation, and input-error mapping**
+- [x] **Step 3: Implement parser, delegation, and input-error mapping**
 
 Change the package import in `kd.py` to:
 
@@ -1166,7 +1166,7 @@ Add this handler immediately after `except CliInputError` in `main`:
 
 Leave the existing `ingestion.IngestionError` handler unchanged so source-owner, adapter, task, and transaction failures remain exit code 3.
 
-- [ ] **Step 4: Add code-only CLI error tests**
+- [x] **Step 4: Add code-only CLI error tests**
 
 Add this test:
 
@@ -1204,7 +1204,7 @@ def test_ingest_codex_session_errors_never_echo_private_arguments(self):
         "reason": "generation-lineage-mismatch"})
 ```
 
-- [ ] **Step 5: Add one subprocess acceptance test**
+- [x] **Step 5: Add one subprocess acceptance test**
 
 Reuse the task setup pattern from `tests/test_local_runtime.py`. Write the private request with `canonical_json`, set the key mode to `0600`, run `self.run_cli`, and assert only bounded fields are emitted:
 
@@ -1263,18 +1263,26 @@ def test_standalone_codex_subprocess_reaches_atomic_ingestion(self):
 
 Add the explicit imports used by the test: `hashlib`, `os`, `time`, `TaskCoordinator`, `create_task`, `inspect_task`, `Event`, `TransitionFacts`, and `canonical_json`.
 
-- [ ] **Step 6: Run CLI and runtime tests green**
+- [x] **Step 6: Run CLI and runtime tests green**
 
 Run: `PYTHONDONTWRITEBYTECODE=1 python3 -W error::ResourceWarning -m unittest tests.test_cli tests.test_local_runtime -v`
 
 Expected: PASS. Existing standalone `ingest-source` still rejects before reading its request when no injected runtime is supplied.
 
-- [ ] **Step 7: Commit the command**
+- [x] **Step 7: Commit the command**
 
 ```bash
 git add knowledge-distiller/scripts/kd.py tests/test_cli.py
 git commit -m "feat: expose standalone Codex session ingestion"
 ```
+
+Completion result: the standalone command and bounded subprocess acceptance are
+in `b0d47db` and `ff6e0cf`. Specification review passed. Quality/security review
+found only an unbounded test subprocess and one duplicate task inspection; both
+were simplified test-first, and re-review returned `Ready: yes` with no
+remaining findings. The CLI/local-runtime suite passed 77/77, the Task 5 full
+suite passed 421/421 before the test-only hardening, and the real subprocess used
+only a temporary copy of the checked-in synthetic Codex fixture.
 
 ### Task 6: Update skill guidance, verify, simplify, and independently review
 
