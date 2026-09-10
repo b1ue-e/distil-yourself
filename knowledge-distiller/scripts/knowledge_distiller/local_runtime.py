@@ -1,6 +1,6 @@
 """Strict decoding for standalone local Codex ingestion requests."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import os
 from pathlib import Path
@@ -219,9 +219,18 @@ def _read_redaction_key(path, uid: int) -> bytes:
     return raw
 
 
-def _runtime_identity(request: LocalCodexRequest):
+def _effective_uid() -> int:
     try:
         effective_uid = os.geteuid()
+        if type(effective_uid) is not int or not 0 <= effective_uid <= 2**63 - 1:
+            raise ValueError
+        return effective_uid
+    except Exception:
+        raise LocalRuntimeError("local-identity-unavailable") from None
+
+
+def _runtime_time() -> int:
+    try:
         timestamp = time.time()
         if (
             type(timestamp) not in (int, float)
@@ -229,8 +238,14 @@ def _runtime_identity(request: LocalCodexRequest):
         ):
             raise ValueError
         now = int(timestamp)
+        return now
     except Exception:
         raise LocalRuntimeError("local-identity-unavailable") from None
+
+
+def _runtime_identity(request: LocalCodexRequest):
+    effective_uid = _effective_uid()
+    now = _runtime_time()
     _validate_runtime_inputs(request, effective_uid, now)
     return effective_uid, now
 
@@ -248,11 +263,15 @@ def _ingest_codex_session(task_root, raw_request, redaction_key_file):
     )
 
     def acquire_codex(native_request, grant, attestation, context):
+        fresh_uid = _effective_uid()
+        if fresh_uid != materialized.identity.expected_owner_uid:
+            raise LocalRuntimeError("local-identity-unavailable")
+        fresh_context = replace(context, now=_runtime_time())
         return brokers.read_local_session(
             native_request,
             grant=grant,
             attestation=attestation,
-            context=context,
+            context=fresh_context,
             identity=materialized.identity,
         )
 

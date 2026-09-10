@@ -389,6 +389,33 @@ class LocalRuntimeMaterializationTest(unittest.TestCase):
 
 
 class LocalRuntimeBoundaryTest(unittest.TestCase):
+    def _captured_codex_dispatch(self):
+        raw = encoded({**request_data(), "derived_processing_until": 2000})
+        key = b"k" * 32
+        expected = object()
+        with mock.patch.object(source_io, "read_source", return_value=key) as reader, \
+                mock.patch.object(
+                    ingestion, "ingest_source", return_value=expected
+                ) as ingest:
+            result = local_runtime.ingest_codex_session(
+                "/PRIVATE/task", raw, "/PRIVATE/key"
+            )
+
+        self.assertIs(result, expected)
+        ingest.assert_called_once()
+        task_root, materialized_request = ingest.call_args.args
+        self.assertEqual(task_root, Path("/PRIVATE/task"))
+        dispatch = ingest.call_args.kwargs["acquire"]
+        grant = authorization.validate_content_grant(
+            materialized_request.content_grant,
+            context=materialized_request.authorization_context,
+        )
+        attestation = authorization.validate_authority_attestation(
+            materialized_request.authority_attestation,
+            context=materialized_request.authorization_context,
+        )
+        return materialized_request, dispatch, grant, attestation, reader
+
     def test_redaction_key_reader_uses_exact_owner_only_policy_and_preserves_bytes(self):
         key = b"k" * 31 + b"\n"
         with mock.patch.object(source_io, "read_source", return_value=key) as reader:
@@ -527,9 +554,11 @@ class LocalRuntimeBoundaryTest(unittest.TestCase):
             materialized_request.authority_attestation,
             context=materialized_request.authorization_context,
         )
-        with mock.patch.object(
-            brokers, "read_local_session", return_value=object()
-        ) as acquire:
+        with mock.patch.object(os, "geteuid", return_value=123), \
+                mock.patch.object(time, "time", return_value=1000.75), \
+                mock.patch.object(
+                    brokers, "read_local_session", return_value=object()
+                ) as acquire:
             acquired = dispatch.codex(
                 materialized_request.native_request,
                 grant,
@@ -550,6 +579,152 @@ class LocalRuntimeBoundaryTest(unittest.TestCase):
         self.assertIs(identity.selector_key, key)
         with self.assertRaises(ingestion.IngestionError):
             dispatch.lark(None, None, None, None)
+
+    def test_codex_acquisition_rechecks_effective_uid_before_broker(self):
+        with mock.patch.object(os, "geteuid", side_effect=[123, 124]), \
+                mock.patch.object(time, "time", return_value=1000):
+            materialized_request, dispatch, grant, attestation, reader = (
+                self._captured_codex_dispatch()
+            )
+            with mock.patch.object(
+                brokers, "read_local_session", return_value=object()
+            ) as acquire:
+                with self.assertRaises(local_runtime.LocalRuntimeError) as caught:
+                    dispatch.codex(
+                        materialized_request.native_request,
+                        grant,
+                        attestation,
+                        materialized_request.authorization_context,
+                    )
+
+        self.assertEqual(caught.exception.code, "local-identity-unavailable")
+        acquire.assert_not_called()
+        reader.assert_called_once_with(
+            "/PRIVATE/key", max_bytes=64, expected_owner_uid=123, owner_only=True,
+        )
+
+    def test_codex_acquisition_rechecks_time_before_broker(self):
+        with mock.patch.object(os, "geteuid", return_value=123), \
+                mock.patch.object(time, "time", side_effect=[1000, 1299]):
+            materialized_request, dispatch, grant, attestation, reader = (
+                self._captured_codex_dispatch()
+            )
+            broker_snapshot = object()
+            with mock.patch.object(
+                brokers, "read_local_session", return_value=broker_snapshot
+            ) as acquire:
+                acquired = dispatch.codex(
+                    materialized_request.native_request,
+                    grant,
+                    attestation,
+                    materialized_request.authorization_context,
+                )
+
+        self.assertIs(acquired, broker_snapshot)
+        acquire.assert_called_once()
+        self.assertEqual(
+            acquire.call_args.kwargs["context"].now,
+            1299,
+        )
+        self.assertEqual((grant.issued_at, grant.expires_at), (1000, 1300))
+        self.assertEqual(
+            materialized_request.authorization_context.now,
+            1000,
+        )
+        reader.assert_called_once_with(
+            "/PRIVATE/key", max_bytes=64, expected_owner_uid=123, owner_only=True,
+        )
+
+    def test_codex_acquisition_bounds_invalid_fresh_time_before_broker(self):
+        with mock.patch.object(os, "geteuid", return_value=123), \
+                mock.patch.object(time, "time", side_effect=[1000, object()]):
+            materialized_request, dispatch, grant, attestation, reader = (
+                self._captured_codex_dispatch()
+            )
+            with mock.patch.object(
+                brokers, "read_local_session", return_value=object()
+            ) as acquire:
+                with self.assertRaises(local_runtime.LocalRuntimeError) as caught:
+                    dispatch.codex(
+                        materialized_request.native_request,
+                        grant,
+                        attestation,
+                        materialized_request.authorization_context,
+                    )
+
+        self.assertEqual(caught.exception.code, "local-identity-unavailable")
+        acquire.assert_not_called()
+        reader.assert_called_once_with(
+            "/PRIVATE/key", max_bytes=64, expected_owner_uid=123, owner_only=True,
+        )
+
+    def test_codex_acquisition_bounds_fresh_uid_failure_before_broker(self):
+        with mock.patch.object(os, "geteuid", side_effect=[123, OSError("PRIVATE-UID")]), \
+                mock.patch.object(time, "time", side_effect=[1000, 1001]):
+            materialized_request, dispatch, grant, attestation, reader = (
+                self._captured_codex_dispatch()
+            )
+            with mock.patch.object(
+                brokers, "read_local_session", return_value=object()
+            ) as acquire:
+                with self.assertRaises(local_runtime.LocalRuntimeError) as caught:
+                    dispatch.codex(
+                        materialized_request.native_request,
+                        grant,
+                        attestation,
+                        materialized_request.authorization_context,
+                    )
+
+        self.assertEqual(caught.exception.code, "local-identity-unavailable")
+        self.assertNotIn("PRIVATE-UID", str(caught.exception))
+        acquire.assert_not_called()
+        reader.assert_called_once_with(
+            "/PRIVATE/key", max_bytes=64, expected_owner_uid=123, owner_only=True,
+        )
+
+    def test_codex_acquisition_does_not_swallow_fresh_time_control_flow(self):
+        with mock.patch.object(os, "geteuid", return_value=123), \
+                mock.patch.object(time, "time", side_effect=[1000, KeyboardInterrupt()]):
+            materialized_request, dispatch, grant, attestation, reader = (
+                self._captured_codex_dispatch()
+            )
+            with mock.patch.object(
+                brokers, "read_local_session", return_value=object()
+            ) as acquire:
+                with self.assertRaises(KeyboardInterrupt):
+                    dispatch.codex(
+                        materialized_request.native_request,
+                        grant,
+                        attestation,
+                        materialized_request.authorization_context,
+                    )
+
+        acquire.assert_not_called()
+        reader.assert_called_once_with(
+            "/PRIVATE/key", max_bytes=64, expected_owner_uid=123, owner_only=True,
+        )
+
+    def test_codex_acquisition_does_not_swallow_fresh_uid_control_flow(self):
+        with mock.patch.object(os, "geteuid", side_effect=[123, KeyboardInterrupt()]), \
+                mock.patch.object(time, "time", side_effect=[1000, 1001]):
+            materialized_request, dispatch, grant, attestation, reader = (
+                self._captured_codex_dispatch()
+            )
+            with mock.patch.object(
+                brokers, "read_local_session", return_value=object()
+            ) as acquire:
+                with self.assertRaises(KeyboardInterrupt):
+                    dispatch.codex(
+                        materialized_request.native_request,
+                        grant,
+                        attestation,
+                        materialized_request.authorization_context,
+                    )
+
+        acquire.assert_not_called()
+        reader.assert_called_once_with(
+            "/PRIVATE/key", max_bytes=64, expected_owner_uid=123, owner_only=True,
+        )
 
     def test_public_runtime_preserves_bounded_errors_and_collapses_unexpected(self):
         for failure in (
@@ -705,6 +880,28 @@ class LocalRuntimeTransactionTest(unittest.TestCase):
                     )
             self.assertEqual(caught.exception.code, expected_code)
             self.assertEqual(inspect_task(self.root).generation_id, before)
+
+    def test_expired_fresh_grant_before_session_read_does_not_commit(self):
+        before = inspect_task(self.root).generation_id
+        read_paths = []
+        real_read_source = source_io.read_source
+
+        def tracking_read_source(path, **kwargs):
+            read_paths.append(os.fspath(path))
+            return real_read_source(path, **kwargs)
+
+        with mock.patch.object(time, "time", side_effect=[1000, 1300]), \
+                mock.patch.object(
+                    source_io, "read_source", side_effect=tracking_read_source
+                ):
+            with self.assertRaises(ingestion.IngestionError) as caught:
+                local_runtime.ingest_codex_session(
+                    self.root, self.raw_request(), str(self.key_path)
+                )
+
+        self.assertEqual(caught.exception.code, "acquisition-failed")
+        self.assertEqual(inspect_task(self.root).generation_id, before)
+        self.assertEqual(read_paths, [str(self.key_path)])
 
 
 if __name__ == "__main__":
