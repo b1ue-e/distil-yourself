@@ -2,7 +2,7 @@
 
 Date: 2026-09-09
 
-Status: proposed for implementation after user review
+Status: implemented
 
 ## Objective
 

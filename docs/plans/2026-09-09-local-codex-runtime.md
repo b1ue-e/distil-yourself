@@ -1297,7 +1297,7 @@ only a temporary copy of the checked-in synthetic Codex fixture.
 - Modify: `docs/status/2026-09-05-implementation-status.md`
 - Modify: `docs/plans/2026-09-09-local-codex-runtime.md`
 
-- [ ] **Step 1: Write failing guidance-contract tests**
+- [x] **Step 1: Write failing guidance-contract tests**
 
 Add contract assertions that require these exact concepts in the rendered skill guidance:
 
@@ -1338,13 +1338,13 @@ def test_standalone_codex_guidance_is_exact_and_does_not_expand_scope(self):
 
 Place the method in the existing `SkillContractTest` class and use its current `ROOT` constant.
 
-- [ ] **Step 2: Run the guidance contract red**
+- [x] **Step 2: Run the guidance contract red**
 
 Run: `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest tests.test_skill_contract -v`
 
 Expected: FAIL because the current guidance still says all standalone ingestion is unavailable.
 
-- [ ] **Step 3: Update progressive-disclosure guidance precisely**
+- [x] **Step 3: Update progressive-disclosure guidance precisely**
 
 Document this exact supported command in `README.md` and `references/workflow.md`:
 
@@ -1370,7 +1370,7 @@ State all of the following in `SKILL.md`, `workflow.md`, and `authorization.md` 
 
 Do not document a key-generation command because key lifecycle is outside this milestone.
 
-- [ ] **Step 4: Run focused and full verification**
+- [x] **Step 4: Run focused and full verification**
 
 Run:
 
@@ -1398,7 +1398,7 @@ find . -type d -name __pycache__ -print
 
 Expected: `compileall` and `git diff --check` exit 0; `find` prints nothing.
 
-- [ ] **Step 5: Run the explicit simplification and redundancy review**
+- [x] **Step 5: Run the explicit simplification and redundancy review**
 
 Answer this review question independently: `是否有可以精简的代码，是否存在冗余、重复或无用的代码/测试/文档？`
 
@@ -1415,7 +1415,7 @@ Inspect these concrete risks:
 
 Remove only demonstrable redundancy. Preserve repeated validation at independent trust boundaries when it prevents caller substitution or time-of-check/time-of-use gaps. Every behavioral cleanup starts with or retains a regression test.
 
-- [ ] **Step 6: Run independent specification and quality/security reviews**
+- [x] **Step 6: Run independent specification and quality/security reviews**
 
 Ask two independent reviewers to inspect the complete diff against `docs/specs/2026-09-09-local-codex-runtime-design.md`:
 
@@ -1424,7 +1424,7 @@ Ask two independent reviewers to inspect the complete diff against `docs/specs/2
 
 For every accepted Critical or Important finding, first add a failing regression test, implement the smallest correction, rerun the focused suite, then rerun the full suite. Do not mark the milestone complete while either reviewer has an unresolved Critical or Important finding.
 
-- [ ] **Step 7: Record verified results and commit locally**
+- [x] **Step 7: Record verified results and commit locally**
 
 Change the design status to `implemented` only after Step 6 passes. Append to `docs/status/2026-09-05-implementation-status.md`:
 
@@ -1441,22 +1441,33 @@ Change the design status to `implemented` only after Step 6 passes. Append to `d
 Mark completed checkboxes in this plan and commit the completion record:
 
 ```bash
-git add knowledge-distiller/SKILL.md knowledge-distiller/references/workflow.md knowledge-distiller/references/authorization.md README.md tests/test_skill_contract.py docs/specs/2026-09-09-local-codex-runtime-design.md docs/status/2026-09-05-implementation-status.md docs/plans/2026-09-09-local-codex-runtime.md
+git add docs/specs/2026-09-09-local-codex-runtime-design.md docs/status/2026-09-05-implementation-status.md docs/plans/2026-09-09-local-codex-runtime.md
 git commit -m "docs: complete standalone Codex runtime milestone"
 ```
 
 Do not push, merge, install, export, publish, read real Codex sessions, invoke Lark, or make a broader environment change without a new explicit user approval.
 
+Completion result: guidance completion landed in `1ef25cd`, and the final
+security fix landed in `a3be2f5`. The final focused six-module suite passed
+170/170 and the full repository suite passed 430/430; `compileall`,
+`git diff --check`, and no-`__pycache__` checks passed. Final independent
+reviews returned `SPEC PASS` and `READY`. The final Important stale
+authorization time/effective UID finding was fixed test-first by rechecking
+the effective UID and rebuilding local authorization immediately before broker
+source I/O. Simplification review found no removable production, test, or doc
+redundancy; the dedicated local request reader and independent trust-boundary
+revalidation remain justified.
+
 ## Acceptance checklist
 
-- [ ] `ingest-codex-session` works in a real subprocess over a temporary copy of the checked-in synthetic fixture, without Python runtime injection.
-- [ ] The request decoder is closed, duplicate-key-safe, bounded, and excludes every caller identity/authority/version field.
-- [ ] Principal, tenant, task, record, and decision identifiers are domain-separated opaque SHA-256 values.
-- [ ] Grant and attestation independently revalidate immediately before session I/O.
-- [ ] Source UID is checked on the same descriptor used for the two pinned-prefix reads.
-- [ ] The key is read from one stable owner-matching single-link regular descriptor with exact `0600` mode and 32–64 untrimmed bytes.
-- [ ] Existing injected `ingest-source` behavior is unchanged.
-- [ ] Failures leave the previous task generation authoritative and emit only allowlisted codes.
-- [ ] CLI output, stderr, journal, and telemetry contain no request/source/key paths, raw key, raw session text, UID, or project ID; private generations contain no filesystem/key path, raw key, unredacted session text, or UID, while retaining only the required opaque project binding and path commitment.
-- [ ] Tests prove no discovery, sibling read, username lookup, Lark call, shell/process launch, network access, key management, extraction, evaluation, export, installation, or publication.
-- [ ] Focused suite, strict full suite, static compilation, whitespace check, cache check, specification review, quality/security review, and simplification review all pass.
+- [x] `ingest-codex-session` works in a real subprocess over a temporary copy of the checked-in synthetic fixture, without Python runtime injection.
+- [x] The request decoder is closed, duplicate-key-safe, bounded, and excludes every caller identity/authority/version field.
+- [x] Principal, tenant, task, record, and decision identifiers are domain-separated opaque SHA-256 values.
+- [x] Grant and attestation independently revalidate immediately before session I/O.
+- [x] Source UID is checked on the same descriptor used for the two pinned-prefix reads.
+- [x] The key is read from one stable owner-matching single-link regular descriptor with exact `0600` mode and 32–64 untrimmed bytes.
+- [x] Existing injected `ingest-source` behavior is unchanged.
+- [x] Failures leave the previous task generation authoritative and emit only allowlisted codes.
+- [x] CLI output, stderr, journal, and telemetry contain no request/source/key paths, raw key, raw session text, UID, or project ID; private generations contain no filesystem/key path, raw key, unredacted session text, or UID, while retaining only the required opaque project binding and path commitment.
+- [x] Tests prove no discovery, sibling read, username lookup, Lark call, shell/process launch, network access, key management, extraction, evaluation, export, installation, or publication.
+- [x] Focused suite, strict full suite, static compilation, whitespace check, cache check, specification review, quality/security review, and simplification review all pass.

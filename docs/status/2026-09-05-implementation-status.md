@@ -1,26 +1,27 @@
 # Knowledge Distiller 实现状态
 
-更新时间：2026-09-09（Asia/Shanghai）
+更新时间：2026-09-10（Asia/Shanghai）
 
 ## 当前结论
 
-`knowledge-distiller` 已完成既有 adapter-contract 里程碑，以及 core dual-source loop 的 Task 1–10。当前完成的是可执行、dependency-injected、全合成/脱敏的核心纵向闭环：Lark 与 Codex ingestion 产物可进入 capability/claim adjudication，编译为固定非安装式 skill draft，并到达 `EVALUATE`。这不代表完整 v1 或 production runtime 已完成。
+`knowledge-distiller` 已完成既有 adapter-contract 里程碑、core dual-source loop 的 Task 1-10，以及新的 standalone LOCAL CODEX runtime：一个显式选择、effective-UID-owned、exact byte-0 prefix 的 Codex session 可通过独立 CLI 进入既有 broker、adapter、redaction、provenance 与 atomic ingestion 事务。当前完成的是可执行、全合成/脱敏的核心纵向闭环加本地 Codex 单文件前缀 runtime；这不代表完整 v1。Lark standalone/production runtime 仍未实现，也未授权任何真实 Codex session read。
 
-Task 10 独立规格终审为 `SPEC PASS`，独立质量终审为 `READY`，Critical、Important、Minor 均无遗留。knowledge/compiler/ingestion/CLI 定向套件为 91/91，严格全量验证为 376/376；`compileall`、`git diff --check` 与仓库无 `__pycache__` 检查均通过。完整验证命令为：
+Standalone local Codex runtime 最终独立规格终审为 `SPEC PASS`，独立质量终审为 `READY`，Critical、Important、Minor 均无遗留。focused six-module 套件为 170/170，严格全量验证为 430/430；`compileall`、`git diff --check` 与仓库无 `__pycache__` 检查均通过。完整验证命令为：
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python3 -W error::ResourceWarning -m unittest discover -s tests -v
 ```
 
-精确 tuple `lark / 1.0.0 / 1.0.86 / docx-v1-raw-content-v1` 为 `normalizer-supported`；`codex / 1.0.0 / 0.153.0 / rollout-jsonl-v1` 已进入 event-graph allowlist 并通过 conformance。Task 7 提供 dependency-injected trusted ingestion runtime 边界，但没有默认 production runtime，也不授权未来读取；Claude Code 与 Trae session adapter 仍为 `blocked`。真实 Lark/Codex host runtime、live revocation/issuer re-authentication、`current-user` 身份认证、parser sandbox、sealed evaluation、签名、导出、安装与发布均未实现。
+精确 tuple `lark / 1.0.0 / 1.0.86 / docx-v1-raw-content-v1` 为 `normalizer-supported`；`codex / 1.0.0 / 0.153.0 / rollout-jsonl-v1` 已进入 event-graph allowlist 并通过 conformance，并由 standalone LOCAL CODEX runtime 固定支持。Task 7 提供 dependency-injected trusted ingestion runtime 边界；当前新增的本地 Codex runtime 只覆盖一个显式 selector/prefix/UID 绑定，不做 discovery、不授权真实读取。真实 Lark standalone/production runtime、live revocation/issuer re-authentication、`current-user` 身份认证、parser sandbox、sealed evaluation、签名、导出、安装与发布均未实现；Claude Code 与 Trae session adapter 仍为 `blocked`。
 
 ## 分支与提交
 
 - 当前分支：`feat/implement_knowledge_distiller`
-- 最新实现提交：`c312861 feat: close the synthetic dual-source core loop`
+- 最新实现提交：`a3be2f5 fix: refresh local authorization before source read`
 - core dual-source loop Task 1–10 已完成规格与质量双审闭环
-- 未 push、未 merge、未安装、未导出、未发布
-- 本状态记录提交后相对本地 `origin/main` ahead 57、behind 0
+- standalone LOCAL CODEX runtime 本地实现 range 仍未 push；origin 仍在 `1304572`
+- 当前分支在本 completion commit 前相对 `origin/feat/implement_knowledge_distiller` ahead 19；本记录提交后会变为 ahead 20
+- 本 post-plan implementation range 未新增 push、merge、安装、导出或发布
 
 已完成的本地提交：
 
@@ -203,11 +204,30 @@ Task 10 已完成 synthetic core 的纵向验收与安全收口。合成测试�
 
 本轮精简/冗余结论：删除唯一确认的 dead `high_impact_conflict` fact 和重复测试分支；共享 privacy policy 消除 question/compiler 两套敏感模式漂移；共享 `_render_section` 消除实际 renderer/provenance renderer 重复。authorization、broker、ingestion、compiler 与各类 safe-file/schema 复验处于不同 trust boundary，保留是必要防御，不应为减少行数而合并。当前没有进一步值得安全删除的生产代码、测试或文档。
 
+### Standalone LOCAL CODEX runtime milestone（2026-09-10）
+
+新增独立命令：
+
+```bash
+python3 knowledge-distiller/scripts/kd.py ingest-codex-session \
+  /absolute/path/to/task-workspace \
+  /absolute/path/to/private-codex-request.json \
+  --redaction-key-file /absolute/path/to/redaction.key
+```
+
+该命令读取 request schema `knowledge-distiller.local-codex-ingestion-request/v1`，只支持固定 tuple `codex / 1.0.0 / 0.153.0 / rollout-jsonl-v1`。effective UID 在 issue 时由 runtime 内部派生，并在 broker/source I/O 前重新读取与重建授权；打开的 session descriptor owner 必须与当前 effective UID 精确匹配。redaction key 必须是 stable owner-matching single-link regular file，权限精确 `0600`，内容为 32-64 raw untrimmed bytes。
+
+验证结果：focused six-module suite 170/170，full suite 430/430，`compileall`、`git diff --check`、no `__pycache__` 均通过。最终独立审查为 `SPEC PASS` 与 `READY`。已解决 findings：Task 4 两个 Minor clock scalar/int64 expiry edge；Task 5 一个 Minor subprocess timeout 与 duplicate inspect；final Important stale authorization time/effective UID 问题已 test-first 修复为 broker 前 fresh recheck。当前无 remaining Critical/Important/Minor。
+
+显式精简结论：没有可删除的 production/test/doc redundancy。dedicated local request reader 是有命名职责的边界，尽管当前大小限制等于通用 request limit；authorization/broker/source I/O 的独立 trust-boundary revalidation 需要保留，不应合并。
+
+验收只使用 checked-in synthetic fixture 复制到临时文件；本 milestone 未读取任何真实 Codex session，也未调用 Lark。剩余工作包括 Lark standalone runtime、automatic extraction/mapping、evaluation、export、installation、publication。本 post-plan milestone range 未发生新的 push、merge、install、export、publish、real session read 或更大范围环境变更；此前按请求做过 progress push，但当前 origin 仍在 `1304572`，本地实现 commits 仍未 push。
+
 ### 产品里程碑
 
 - Claude Code、Trae session adapters 的 content-authorized fixtures 与版本兼容性验证。
 - DiscoveryGrant、MetadataGrant、ContentGrant、AuthorityAttestation 的持久化与 broker binding。
-- Lark production credential runtime 与 Codex local-session identity runtime 的默认 wiring。
+- Lark standalone/production runtime、Codex discovery/default broader wiring 与自动 extraction/mapping。
 - sealed evaluator、ApprovalSubject、VersionApproval。
 - export consent、purge、audit 与 stale-export repair。
 
@@ -219,5 +239,5 @@ Task 10 已完成 synthetic core 的纵向验收与安全收口。合成测试�
 - 真实 Lark 正文未显示、未写入仓库、未保存在测试 fixture；仓库内只有合成内容与 bounded schema 元数据。
 - 已按用户明确授权对本地 Codex active/archived session roots 做只读聚合兼容性 probe；没有输出或保留正文、路径、session ID，未读取 credentials/config/cache，也未修改原生文件。
 - 除上述单一已授权 Lark probe 与 Codex 聚合兼容性 probe 外，只使用官方资料、CLI `--help`/`--version` 和 synthetic fixtures。
-- 未执行 push、merge、skill 安装、导出、发布或外部写入。
+- 本 post-plan milestone range 未新增 push、merge、skill 安装、导出、发布或外部写入；此前按请求做过 progress push，当前 origin 仍在 `1304572`，本地实现 commits 仍未 push。
 - 未进行更大范围的环境变更；观察到的 CLI 版本/skill notice 未触发升级或配置修改。
