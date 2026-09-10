@@ -9,9 +9,9 @@ description: Use when a user wants to distill their documents, agent sessions, d
 
 Turn authorized personal evidence into one small, testable skill draft that preserves decision cues, constraints, exceptions, and recovery strategies.
 
-This implements checkpoints, authorization validation, dependency-injected dual-source ingestion, strict packets, one-question selection, adjudication, and a private-draft compiler. The canonical adapter contract and synthetic conformance harness exist. One exact Lark raw-content normalizer tuple and one exact Codex rollout adapter tuple are available.
+This implements checkpoints, authorization validation, dependency-injected dual-source ingestion, one owner-only standalone local Codex ingestion path, strict packets, one-question selection, adjudication, and a private-draft compiler. The canonical adapter contract and synthetic conformance harness exist. One exact Lark raw-content normalizer tuple and one exact Codex rollout adapter tuple are available.
 
-Automatic discovery, the production Lark runtime, production Codex runtime, Claude Code adapter, Trae adapter, sealed evaluation, approval signatures, export, installation, publication, and purge are unavailable. Never simulate one of these boundaries.
+Automatic discovery, the production Lark runtime, a general production Codex runtime beyond the standalone local path, Claude Code adapter, Trae adapter, sealed evaluation, approval signatures, export, installation, publication, and purge are unavailable. Never simulate one of these boundaries.
 
 ## Route the request
 
@@ -37,7 +37,7 @@ When a user provides a specific candidate canonical graph for normalization or v
 2. Resume with `task-inspect`; use `--recover` only for its reported recoverable cases, and stop on corruption.
 3. Automatic discovery is unavailable. Use only metadata and selectors the user explicitly grants or approves.
 4. Each private request covers one selector and pinned revision or closed session range, with active ContentGrant and AuthorityAttestation before every source read.
-5. A trusted host must inject the exact Lark or Codex runtime. Ingest each separately; after both, follow the mode route in [references/workflow.md](references/workflow.md). Never print request content or redacted evidence.
+5. Use `ingest-source` with an injected trusted runtime. Route `ingest-codex-session` through [references/workflow.md](references/workflow.md): explicit invocation is the read decision for one explicit session file and exact byte-0 prefix only. Ingest separately, then follow its mode route. Never print request content or redacted evidence.
 6. Build the strict packet defined in [references/knowledge-packet.md](references/knowledge-packet.md). Preserve `source snapshot → native evidence → redacted span → ContentGrant → AuthorityAttestation` for every claim.
 7. Ask at most one critical question at a time. A lower-impact uncertainty does not block progress. Before adjudication, the current user must explicitly confirm the selected capability and every claim that will be published. Do not generate or infer user confirmation.
 8. Compile only the exact adjudicated packet bytes and confirmed publishable guidance. The compiler validates the fixed `SKILL.md` and `references/capability.md` bundle, then privately persists their manifest and compiled-rule provenance; it does not install or export.
@@ -58,7 +58,7 @@ python3 scripts/kd.py task-transition /absolute/path/to/task-workspace --event s
 
 Treat a rejected transition, corrupt workspace, or artifact as blocking. Do not weaken policy or edit a source to make validation pass.
 
-For the exact evidence-to-draft command sequence, read [references/workflow.md](references/workflow.md). Source ingestion is currently an embedded API boundary: its shell examples are syntax only. Standalone `kd.py ingest-source` returns `ingestion-runtime-unavailable` before reading the request file because no production runtime can be injected from the shell.
+For commands, read [references/workflow.md](references/workflow.md). `ingest-source` is an embedded API boundary whose shell examples are syntax only; it returns `ingestion-runtime-unavailable` before reading the request file without an injected host runtime.
 
 Successful event-graph validation proves only that the graph conforms to an allowlisted exact tuple and the canonical contract. It does not authorize a source read, native tool invocation, directory enumeration, ingestion, or any future access. Native readiness is defined separately by the compatibility gate.
 

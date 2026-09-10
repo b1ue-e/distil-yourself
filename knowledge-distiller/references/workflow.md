@@ -18,7 +18,7 @@ Resume is an operation on a suspended state, not a fourth mode. It revalidates i
 
 The engine also represents `revision-review`, `suspended`, `suspended-exhausted`, `auth-stale`, `done`, `done-approved`, `done-partial`, `cancelled`, and `failed-permanent`.
 
-The implementation provides transition validation, local durable task-state persistence, dependency-injected Lark and Codex ingestion, strict knowledge validation, explicit claim adjudication, and private draft compilation. It has no production source runtime and no export side effects. A successful transition means only that the requested phase change is legal under supplied typed facts and was checkpointed locally.
+The implementation provides transition validation, local durable task-state persistence, dependency-injected Lark and Codex ingestion, one narrow standalone local Codex runtime, strict knowledge validation, explicit claim adjudication, and private draft compilation. It has no general production source runtime and no export side effects. A successful transition means only that the requested phase change is legal under supplied typed facts and was checkpointed locally.
 
 ## Supported evidence-to-draft path
 
@@ -29,6 +29,21 @@ The implementation provides transition validation, local durable task-state pers
 5. Give `compile-capability` the exact adjudicated packet bytes and the new generation ID. It revalidates persisted provenance and recorded grant digest/time bounds, produces a closed two-file bundle, invokes the artifact validator, and atomically stores the exact bytes and manifest. Current revocation and issuer authentication remain the trusted broker's responsibility.
 
 Compilation stops at `evaluate`; sealed evaluation is unavailable. It does not install or export the draft.
+
+## Standalone local Codex ingestion
+
+From the repository root, the exact supported command is:
+
+```bash
+python3 knowledge-distiller/scripts/kd.py ingest-codex-session \
+  /absolute/path/to/task-workspace \
+  /absolute/path/to/private-codex-request.json \
+  --redaction-key-file /absolute/path/to/redaction.key
+```
+
+The private request uses `knowledge-distiller.local-codex-ingestion-request/v1` and selects one explicit session file and exact byte-0 prefix. Only `Codex / 1.0.0 / 0.153.0 / rollout-jsonl-v1` is supported. The runtime derives identity from the effective UID; the opened source must have the same UID. The key must be a stable, single-link regular file with exact `0600` mode and contain 32–64 raw bytes. Key generation and lifecycle are outside this milestone.
+
+The request is intentionally closed: the caller never supplies UID, owner, issuer, grant, attestation, adapter version, or native schema. See [authorization.md](authorization.md) for the read decision and private binding semantics. Discovery, sibling reads, arbitrary versions, Lark standalone access, automatic extraction, evaluation, export, installation, and publication are unavailable.
 
 The trusted host uses these exact argument shapes from the skill directory:
 
@@ -41,7 +56,7 @@ python3 scripts/kd.py adjudicate-knowledge-packet /absolute/path/to/task-workspa
 python3 scripts/kd.py compile-capability /absolute/path/to/task-workspace /absolute/path/to/knowledge-packet.json --transaction-id COMPILE_ID --expected-generation-id GENERATION_ID
 ```
 
-The two ingestion shell examples are syntax only for the embedded API boundary. Standalone `kd.py ingest-source` returns `ingestion-runtime-unavailable` before reading the request file; it cannot perform real ingestion until a production host injects the matching runtime. Each private request must carry all trusted context and authorization records at once. Use the generation ID from the immediately preceding checkpoint; adjudication creates the generation that compilation must consume.
+The two `ingest-source` shell examples are syntax only for the embedded API boundary. Standalone `kd.py ingest-source` returns `ingestion-runtime-unavailable` before reading the request file; it cannot perform real ingestion until a host injects the matching runtime. Each private request must carry all trusted context and authorization records at once. Use the generation ID from the immediately preceding checkpoint; adjudication creates the generation that compilation must consume.
 
 Bounded evidence review is unavailable; an explicit request does not create a supported evidence-output path. Keep excerpts inside the private task artifacts.
 

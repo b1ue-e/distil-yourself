@@ -2,7 +2,7 @@
 
 Distil Yourself is a privacy-conscious, resumable Skill Factory for turning a person's documents, agent sessions, and explicit judgments into small, behaviorally testable agent skills.
 
-The approved design now has a runnable local core: guarded workflow checkpoints, authorization validation, dependency-injected Lark and Codex ingestion, a strict evidence/claim model, deterministic capability scoring, one-question selection, explicit adjudication, and a non-installing domain-skill compiler.
+The approved design now has a runnable local core: guarded workflow checkpoints, authorization validation, dependency-injected Lark and Codex ingestion, one narrow owner-only standalone local Codex path, a strict evidence/claim model, deterministic capability scoring, one-question selection, explicit adjudication, and a non-installing domain-skill compiler.
 
 ## Design
 
@@ -17,11 +17,11 @@ The proposed workflow:
 5. validate it with historical, boundary, trigger, and safety evaluations;
 6. require explicit approval before export or lifecycle updates.
 
-The [adapter compatibility matrix](knowledge-distiller/references/adapter-compatibility.md) and [canonical adapter contract](knowledge-distiller/references/adapter-contract.md) define the current boundary: the canonical adapter contract and synthetic conformance harness exist. One exact Lark raw-content normalizer tuple and one exact Codex rollout adapter tuple are available. Trusted, dependency-injected dual-source ingestion exists, but default production source runtimes do not.
+The [adapter compatibility matrix](knowledge-distiller/references/adapter-compatibility.md) and [canonical adapter contract](knowledge-distiller/references/adapter-contract.md) define the current boundary: the canonical adapter contract and synthetic conformance harness exist. One exact Lark raw-content normalizer tuple and one exact Codex rollout adapter tuple are available. Trusted, dependency-injected dual-source ingestion and one pinned local Codex runtime exist, but general production source runtimes do not.
 
 ## V1 boundaries
 
-V1 does not silently scan accessible data, generate or execute domain scripts, install skills, publish artifacts, or treat account access as permission to ingest content. Private evidence, sealed evaluations, and exportable skill artifacts remain separated. Automatic discovery, the production Lark runtime, production Codex runtime, Claude Code adapter, Trae adapter, sealed evaluation, approval signatures, export, installation, publication, and purge are unavailable.
+V1 does not silently scan accessible data, generate or execute domain scripts, install skills, publish artifacts, or treat account access as permission to ingest content. Private evidence, sealed evaluations, and exportable skill artifacts remain separated. Automatic discovery, the production Lark runtime, a general production Codex runtime beyond the standalone local path, Claude Code adapter, Trae adapter, sealed evaluation, approval signatures, export, installation, publication, and purge are unavailable.
 
 ## Foundation usage
 
@@ -77,6 +77,17 @@ Task directories and regular files use `0700` and `0600` modes. The framed journ
 
 Checkpoint facts are a closed set of booleans and one phase enum. Never place source text, secrets, locators, or free-form notes in them. Persisting a state transition grants no source access and authorizes no external mutation.
 
+Ingest one explicitly selected, pinned local Codex session prefix from the repository root with:
+
+```bash
+python3 knowledge-distiller/scripts/kd.py ingest-codex-session \
+  /absolute/path/to/task-workspace \
+  /absolute/path/to/private-codex-request.json \
+  --redaction-key-file /absolute/path/to/redaction.key
+```
+
+The request schema is `knowledge-distiller.local-codex-ingestion-request/v1`. This command is limited to the exact owner-only local boundary documented in [the workflow](knowledge-distiller/references/workflow.md) and [authorization reference](knowledge-distiller/references/authorization.md); it does not discover sessions, create a key, extract capabilities, evaluate, export, install, or publish.
+
 The following lines document the embedded API boundary syntax only. They are not directly executable for real ingestion without a production host runtime:
 
 ```bash
@@ -96,7 +107,7 @@ Compilation revalidates persisted provenance and recorded grant digest/time boun
 
 ## Foundation limits
 
-This milestone does not implement automatic discovery, a production Lark runtime, a production Codex runtime, the Claude Code adapter, the Trae adapter, a parser sandbox, renewable/distributed leases, sealed evaluation, approval signatures, export/purge brokers, installation, or publication. Passing local validation or writing a checkpoint authorizes none of those operations.
+This milestone does not implement automatic discovery, a production Lark runtime, a general production Codex runtime beyond the standalone local path, the Claude Code adapter, the Trae adapter, a parser sandbox, renewable/distributed leases, sealed evaluation, approval signatures, export/purge brokers, installation, or publication. Passing local validation or writing a checkpoint authorizes none of those operations.
 
 ## Repository status
 

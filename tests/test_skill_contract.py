@@ -576,6 +576,55 @@ class SkillContractTest(unittest.TestCase):
                 for command in commands:
                     self.assertIn(prefix + command, lines)
 
+    def test_public_guidance_defines_the_standalone_codex_runtime_boundary(self) -> None:
+        texts = {
+            path.name: path.read_text(encoding="utf-8")
+            for path in (
+                SKILL_FILE,
+                WORKFLOW_FILE,
+                AUTHORIZATION_FILE,
+                README_FILE,
+            )
+        }
+        normalized = " ".join(" ".join(texts.values()).lower().split())
+        for requirement in (
+            "ingest-codex-session",
+            "--redaction-key-file",
+            "knowledge-distiller.local-codex-ingestion-request/v1",
+            "one explicit session file",
+            "exact byte-0 prefix",
+            "effective uid",
+            "0600",
+            "does not authorize a real session read",
+            "ingest-source",
+            "ingestion-runtime-unavailable",
+            "codex / 1.0.0 / 0.153.0 / rollout-jsonl-v1",
+            "caller never supplies uid, owner, issuer, grant, attestation, adapter version, or native schema",
+            "filesystem selector is persisted only as a domain-separated commitment",
+            "opaque `project_id` is required for private provenance binding but is never printed",
+            "synthetic acceptance does not authorize any real session read",
+            "discovery, sibling reads, arbitrary versions, lark standalone access, automatic extraction, evaluation, export, installation, and publication are unavailable",
+            "key generation and lifecycle are outside this milestone",
+        ):
+            self.assertIn(requirement, normalized)
+
+        command = (
+            "python3 knowledge-distiller/scripts/kd.py ingest-codex-session \\\n"
+            "  /absolute/path/to/task-workspace \\\n"
+            "  /absolute/path/to/private-codex-request.json \\\n"
+            "  --redaction-key-file /absolute/path/to/redaction.key"
+        )
+        self.assertIn(command, texts["README.md"])
+        self.assertIn(command, texts["workflow.md"])
+        for overclaim in (
+            "automatically discovers Codex sessions",
+            "supports every Codex version",
+            "creates the redaction key",
+            "installs the distilled skill",
+            "publishes the distilled skill",
+        ):
+            self.assertNotIn(overclaim.lower(), normalized)
+
     def test_core_guidance_defines_authority_provenance_and_question_boundaries(self) -> None:
         combined = " ".join((
             self.skill_text(),

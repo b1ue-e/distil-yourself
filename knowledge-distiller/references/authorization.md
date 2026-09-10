@@ -27,6 +27,14 @@ Each ingestion request covers one source selector and pinned revision or closed 
 
 If third-party authority cannot be verified by a trusted issuer, exclude the source. Historical approvals inside sessions are evidence only and never grant current access or mutation rights.
 
+## Standalone local Codex read decision
+
+The `ingest-codex-session` request selects one explicit session file and exact byte-0 prefix. Explicit invocation is the read decision for only that selector. Fixture or parser success does not authorize a real session read; synthetic acceptance does not authorize any real session read. It does not authorize discovery, directory or sibling reads, later appends, or another invocation.
+
+The trusted runtime derives the principal, tenant, owner, issuer, ContentGrant, AuthorityAttestation, adapter tuple, and native schema from the effective UID and fixed implementation facts. The opened source must have the same UID. The filesystem selector is persisted only as a domain-separated commitment. An opaque `project_id` is required for private provenance binding but is never printed.
+
+The redaction key is a stable single-link regular exact-`0600` file containing 32–64 raw bytes. The runtime reads it under the same effective-UID ownership policy. Key generation and lifecycle are outside this milestone; this command neither creates nor rotates the key.
+
 ## Executable content authorization contract
 
 `authorization.py` validates materialized dictionaries into distinct frozen
