@@ -1,0 +1,19 @@
+{
+  "ok": true,
+  "identity": "user",
+  "data": {
+    "document": {
+      "document_id": "doxcn1234567890AbCdEfGhIjKl",
+      "revision_id": 7,
+      "title": "Synthetic Document",
+      "create_time": "1700000000",
+      "update_time": "1700000001",
+      "display_setting": {
+        "show_authors": true,
+        "show_create_time": true,
+        "show_pv": false,
+        "show_uv": false
+      }
+    }
+  }
+}

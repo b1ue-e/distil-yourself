@@ -1,0 +1,17 @@
+{
+  "ok": true,
+  "identity": "user",
+  "data": {
+    "metas": [
+      {
+        "doc_token": "doxcn1234567890AbCdEfGhIjKl",
+        "doc_type": "docx",
+        "owner_id": "ou_SYNTHETIC_OWNER",
+        "title": "Synthetic Document",
+        "create_time": "1700000000",
+        "modified_time": "1700000001"
+      }
+    ],
+    "failed_list": []
+  }
+}

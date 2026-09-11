@@ -1,0 +1,16 @@
+{
+  "identity": "user",
+  "verified": true,
+  "status": "active",
+  "token_status": "valid",
+  "identities": {
+    "user": {
+      "openId": "ou_SYNTHETIC_OWNER",
+      "scope": [
+        "docx:document:readonly",
+        "drive:drive.metadata:readonly"
+      ],
+      "display_name": "Synthetic User"
+    }
+  }
+}
