@@ -199,7 +199,7 @@ git commit -m "refactor: share standalone runtime preflight"
 - Create: `tests/test_lark_selector.py`
 - Create: `tests/test_lark_runtime.py`
 
-- [ ] **Step 1: Write failing selector and request-decoder tests**
+- [x] **Step 1: Write failing selector and request-decoder tests**
 
 Use one synthetic 27-character token and prove bare-token/URL equivalence:
 
@@ -229,7 +229,7 @@ def test_decoder_accepts_only_the_closed_private_request(self):
 
 Cover non-ASCII input, token lengths 26/28, `_`/`-`, uppercase scheme/host, empty or hyphen-edge labels, base domains without a tenant label, port `443`, userinfo, percent encoding, query, fragment, trailing slash, Wiki paths, duplicate JSON keys, unknown fields, booleans as timestamps, oversize input, and caller-provided identity/owner/revision/profile fields.
 
-- [ ] **Step 2: Run selector and decoder tests red**
+- [x] **Step 2: Run selector and decoder tests red**
 
 Run:
 
@@ -240,7 +240,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest \
 
 Expected: FAIL because the modules do not exist.
 
-- [ ] **Step 3: Implement immutable selector parsing and strict decoding**
+- [x] **Step 3: Implement immutable selector parsing and strict decoding**
 
 Create the selector record and parser:
 
@@ -269,7 +269,7 @@ def selector_commitment(token: str) -> str:
 
 Create `LocalLarkRequest` with the five design fields, `REQUEST_SCHEMA`, `REQUEST_FIELDS`, and `MAX_LOCAL_REQUEST_BYTES = ingestion.MAX_REQUEST_BYTES`. Decode with `adapters.decode_event_graph_json`, exact object fields, built-in scalar checks, existing identifier validators, and `parse_document_selector`; store only the normalized token in the immutable request.
 
-- [ ] **Step 4: Run selector and decoder tests green**
+- [x] **Step 4: Run selector and decoder tests green**
 
 Run:
 
@@ -280,7 +280,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 -W error::ResourceWarning -m unittest \
 
 Expected: PASS with no network, subprocess, auth, filesystem enumeration, or source read.
 
-- [ ] **Step 5: Commit the request boundary**
+- [x] **Step 5: Commit the request boundary**
 
 ```bash
 git add knowledge-distiller/scripts/knowledge_distiller/lark_selector.py \
