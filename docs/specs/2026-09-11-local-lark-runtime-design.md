@@ -142,11 +142,15 @@ Docx-basic-information GET and Drive-metadata query both repeat after raw
 content. Every remote API command is explicitly `--as user`; the auth command
 must itself report that the selected and verified identity is `user`.
 
-The runtime resolves `lark-cli` once to a canonical regular-file path, records
-its device, inode, owner, mode, size, and nanosecond modification time, executes
-that path directly, and rechecks the fingerprint before and after every call.
-It requires exact version `1.0.86`, suppresses update notices, and never runs an
-update. A different binary or schema needs a separate fixture, review, and
+The runtime resolves the PATH entry once. If it is the packaged Node launcher,
+the resolver uses its fixed package layout only to locate an already installed
+native `bin/lark-cli`; it never executes the launcher because that launcher may
+auto-download a missing binary. A missing or unrecognized layout fails closed.
+The resolver records the native executable's canonical path, device, inode,
+owner, mode, size, and nanosecond modification time, executes that path
+directly, and rechecks the fingerprint before and after every call. It requires
+exact version `1.0.86`, suppresses update notices, and never installs or updates
+anything. A different binary or schema needs a separate fixture, review, and
 explicit profile addition.
 
 The machine-readable profile is a canonical checked-in record containing its
