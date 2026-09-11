@@ -53,7 +53,7 @@ No public request, CLI option, environment variable, or profile-data edit can pr
 - Modify: `tests/test_local_runtime.py`
 - Modify: `tests/test_ingestion.py`
 
-- [ ] **Step 1: Write failing shared-helper and preflight tests**
+- [x] **Step 1: Write failing shared-helper and preflight tests**
 
 Add tests that require the same owner-only key policy and prove no acquisition occurs for an invalid task slot:
 
@@ -84,7 +84,7 @@ def test_preflight_rejects_stale_generation_without_acquisition(self):
 
 Extend the existing local-runtime mocks to assert that `runtime_support` is called and that all existing `LocalRuntimeError` codes remain unchanged.
 
-- [ ] **Step 2: Run the new tests red**
+- [x] **Step 2: Run the new tests red**
 
 Run:
 
@@ -97,7 +97,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest \
 
 Expected: FAIL because `runtime_support` and `preflight_ingestion_slot` do not exist.
 
-- [ ] **Step 3: Implement the minimal shared helpers and one slot predicate**
+- [x] **Step 3: Implement the minimal shared helpers and one slot predicate**
 
 Create the shared module with these public values and functions:
 
@@ -169,7 +169,7 @@ def preflight_ingestion_slot(task_root: Path, expected_generation_id: str,
 
 Call `_require_ingestion_slot` from the existing writer-lease block in `ingest_source`; never rely on the earlier preflight for atomicity.
 
-- [ ] **Step 4: Run shared-helper and regression suites green**
+- [x] **Step 4: Run shared-helper and regression suites green**
 
 Run:
 
@@ -180,7 +180,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 -W error::ResourceWarning -m unittest \
 
 Expected: PASS with the existing Codex behavior and failure codes unchanged.
 
-- [ ] **Step 5: Commit the extraction**
+- [x] **Step 5: Commit the extraction**
 
 ```bash
 git add knowledge-distiller/scripts/knowledge_distiller/runtime_support.py \
