@@ -364,6 +364,37 @@ def _preflight_source(request, acquire):
         _fail("unsupported-source-kind")
 
 
+def _require_ingestion_slot(coordinator, expected_generation_id, source_kind):
+    if (coordinator.snapshot is None
+            or coordinator.snapshot.generation_id != expected_generation_id):
+        _fail("generation-lineage-mismatch")
+    if coordinator.snapshot.state.phase is not Phase.INGEST:
+        _fail("ingestion-invalid")
+    existing_artifacts = coordinator._current_artifacts() or []
+    existing_sources = _existing_source_kinds(existing_artifacts)
+    if source_kind in existing_sources:
+        _fail("source-already-ingested")
+    return existing_artifacts, existing_sources
+
+
+def preflight_ingestion_slot(
+    task_root: Path, expected_generation_id: str, source_kind: str,
+) -> None:
+    """Check a task's ingestion slot without acquiring any source."""
+    try:
+        if type(source_kind) is not str or source_kind not in ("lark", "codex"):
+            _fail("unsupported-source-kind")
+        adapters._identifier(expected_generation_id, "/")
+        with TaskCoordinator(Path(task_root)) as coordinator:
+            _require_ingestion_slot(coordinator, expected_generation_id, source_kind)
+    except IngestionError:
+        raise
+    except TaskPersistenceError as error:
+        raise IngestionError(error.code) from None
+    except Exception:
+        raise IngestionError("ingestion-failed") from None
+
+
 def ingest_source(task_root: Path, request: IngestionRequest, *, acquire: AcquisitionDispatch,
                   redaction_key: bytes) -> IngestionResult:
     """Validate, acquire, normalize, and atomically persist one source snapshot."""
@@ -379,15 +410,8 @@ def ingest_source(task_root: Path, request: IngestionRequest, *, acquire: Acquis
         if type(redaction_key) is not bytes or not 32 <= len(redaction_key) <= 64:
             _fail("ingestion-runtime-invalid")
         with TaskCoordinator(Path(task_root)) as coordinator:
-            if (coordinator.snapshot is None
-                    or coordinator.snapshot.generation_id != request.expected_generation_id):
-                _fail("generation-lineage-mismatch")
-            if coordinator.snapshot.state.phase is not Phase.INGEST:
-                _fail("ingestion-invalid")
-            existing_artifacts = coordinator._current_artifacts() or []
-            existing_sources = _existing_source_kinds(existing_artifacts)
-            if request.source_kind in existing_sources:
-                _fail("source-already-ingested")
+            existing_artifacts, existing_sources = _require_ingestion_slot(
+                coordinator, request.expected_generation_id, request.source_kind)
             try:
                 snapshot = acquire_source(
                     _clone_native_request(

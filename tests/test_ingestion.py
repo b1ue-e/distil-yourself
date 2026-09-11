@@ -542,6 +542,15 @@ class IngestionTest(unittest.TestCase):
         lark_snapshot = self.snapshot(
             lark_raw, "lark", "1.0.86", native_adapters.LARK_NATIVE_SCHEMA_DIGEST)
 
+        before = inspect_task(self.root)
+        ingestion.preflight_ingestion_slot(
+            self.root, before.generation_id, "lark")
+        after = inspect_task(self.root)
+        self.assertEqual(
+            (after.generation_id, after.manifest_digest, after.state),
+            (before.generation_id, before.manifest_digest, before.state),
+        )
+
         first, first_calls = self.ingest(lark_request, lark_snapshot)
 
         first_state = inspect_task(self.root)
@@ -552,6 +561,11 @@ class IngestionTest(unittest.TestCase):
         duplicate = ingestion.IngestionRequest(
             **{**vars(lark_request), "expected_generation_id": first.generation_id})
         duplicate_calls = []
+        with self.assertRaises(ingestion.IngestionError) as caught:
+            ingestion.preflight_ingestion_slot(
+                self.root, first.generation_id, "lark")
+        self.assertEqual(caught.exception.code, "source-already-ingested")
+
         with self.assertRaises(ingestion.IngestionError) as caught:
             ingestion.ingest_source(
                 self.root, duplicate,
@@ -673,6 +687,10 @@ class IngestionTest(unittest.TestCase):
         calls = []
 
         with self.assertRaises(ingestion.IngestionError) as caught:
+            ingestion.preflight_ingestion_slot(root, review.generation_id, "lark")
+        self.assertEqual(caught.exception.code, "ingestion-invalid")
+
+        with self.assertRaises(ingestion.IngestionError) as caught:
             ingestion.ingest_source(
                 root, request,
                 acquire=ingestion.AcquisitionDispatch(
@@ -735,6 +753,16 @@ class IngestionTest(unittest.TestCase):
                     redaction_key=self.key)
             self.assertEqual(caught.exception.code, code)
             self.assertEqual(calls, [])
+
+        for kind, generation, code in (
+                ("lark", "g-stale", "generation-lineage-mismatch"),
+                ("unknown", self.ingest_state.generation_id, "unsupported-source-kind"),
+                (SourceKindSubclass("lark"), self.ingest_state.generation_id,
+                 "unsupported-source-kind")):
+            with self.subTest(preflight_kind=kind):
+                with self.assertRaises(ingestion.IngestionError) as caught:
+                    ingestion.preflight_ingestion_slot(self.root, generation, kind)
+                self.assertEqual(caught.exception.code, code)
 
     def test_expiry_principal_schema_and_source_drift_never_commit(self):
         raw = b'{"ok":true,"identity":"user","data":{"content":"safe"}}'

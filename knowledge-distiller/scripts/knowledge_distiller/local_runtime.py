@@ -4,18 +4,17 @@ from dataclasses import dataclass, replace
 import hashlib
 import os
 from pathlib import Path
-import time
 
 from . import (
-    adapters, authorization, brokers, ingestion, native_adapters, source_io,
+    adapters, authorization, brokers, ingestion, native_adapters, runtime_support,
 )
 from .journal import canonical_json
 
 
 REQUEST_SCHEMA = "knowledge-distiller.local-codex-ingestion-request/v1"
 MAX_LOCAL_REQUEST_BYTES = ingestion.MAX_REQUEST_BYTES
-READ_WINDOW_SECONDS = 300
-MAX_DERIVED_SECONDS = 90 * 24 * 60 * 60
+READ_WINDOW_SECONDS = runtime_support.READ_WINDOW_SECONDS
+MAX_DERIVED_SECONDS = runtime_support.MAX_DERIVED_SECONDS
 PURPOSE = "distill-knowledge"
 LOCAL_OWNER_VERIFIER = "local-owner-verifier-v1"
 REQUEST_FIELDS = frozenset(
@@ -206,41 +205,23 @@ def materialize_local_codex_request(
 
 def _read_redaction_key(path, uid: int) -> bytes:
     try:
-        raw = source_io.read_source(
-            path,
-            max_bytes=64,
-            expected_owner_uid=uid,
-            owner_only=True,
-        )
-    except source_io.SourceIOError:
-        raise LocalRuntimeError("unsafe-redaction-key") from None
-    if type(raw) is not bytes or not 32 <= len(raw) <= 64:
-        raise LocalRuntimeError("unsafe-redaction-key")
-    return raw
+        return runtime_support.read_redaction_key(path, uid)
+    except runtime_support.RuntimeSupportError as error:
+        raise LocalRuntimeError(error.code) from None
 
 
 def _effective_uid() -> int:
     try:
-        effective_uid = os.geteuid()
-        if type(effective_uid) is not int or not 0 <= effective_uid <= 2**63 - 1:
-            raise ValueError
-        return effective_uid
-    except Exception:
-        raise LocalRuntimeError("local-identity-unavailable") from None
+        return runtime_support.effective_uid()
+    except runtime_support.RuntimeSupportError as error:
+        raise LocalRuntimeError(error.code) from None
 
 
 def _runtime_time() -> int:
     try:
-        timestamp = time.time()
-        if (
-            type(timestamp) not in (int, float)
-            or not 0 <= timestamp <= 2**63 - 1
-        ):
-            raise ValueError
-        now = int(timestamp)
-        return now
-    except Exception:
-        raise LocalRuntimeError("local-identity-unavailable") from None
+        return runtime_support.runtime_time()
+    except runtime_support.RuntimeSupportError as error:
+        raise LocalRuntimeError(error.code) from None
 
 
 def _runtime_identity(request: LocalCodexRequest):
