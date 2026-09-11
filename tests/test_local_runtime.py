@@ -391,33 +391,24 @@ class LocalRuntimeMaterializationTest(unittest.TestCase):
 class LocalRuntimeBoundaryTest(unittest.TestCase):
     def test_runtime_helpers_delegate_and_map_runtime_support_errors(self):
         key = b"k" * 32
-        with mock.patch.object(
-                runtime_support, "read_redaction_key", return_value=key) as read_key, \
-                mock.patch.object(runtime_support, "effective_uid", return_value=123) as uid, \
-                mock.patch.object(runtime_support, "runtime_time", return_value=1000) as now:
-            self.assertIs(local_runtime._read_redaction_key("/PRIVATE/key", 123), key)
-            self.assertEqual(local_runtime._effective_uid(), 123)
-            self.assertEqual(local_runtime._runtime_time(), 1000)
-
-        read_key.assert_called_once_with("/PRIVATE/key", 123)
-        uid.assert_called_once_with()
-        now.assert_called_once_with()
-        for helper, failure in (
-                (local_runtime._read_redaction_key,
-                 runtime_support.RuntimeSupportError("unsafe-redaction-key")),
-                (local_runtime._effective_uid,
-                 runtime_support.RuntimeSupportError("local-identity-unavailable")),
-                (local_runtime._runtime_time,
-                 runtime_support.RuntimeSupportError("local-identity-unavailable"))):
+        for helper, shared_name, args, result, error_code in (
+                (local_runtime._read_redaction_key, "read_redaction_key",
+                 ("/PRIVATE/key", 123), key, "unsafe-redaction-key"),
+                (local_runtime._effective_uid, "effective_uid", (), 123,
+                 "local-identity-unavailable"),
+                (local_runtime._runtime_time, "runtime_time", (), 1000,
+                 "local-identity-unavailable")):
             with self.subTest(helper=helper.__name__), mock.patch.object(
-                    runtime_support,
-                    {local_runtime._read_redaction_key: "read_redaction_key",
-                     local_runtime._effective_uid: "effective_uid",
-                     local_runtime._runtime_time: "runtime_time"}[helper],
-                    side_effect=failure):
+                    runtime_support, shared_name, return_value=result) as shared:
+                self.assertEqual(helper(*args), result)
+            shared.assert_called_once_with(*args)
+
+            with mock.patch.object(
+                    runtime_support, shared_name,
+                    side_effect=runtime_support.RuntimeSupportError(error_code)):
                 with self.assertRaises(local_runtime.LocalRuntimeError) as caught:
-                    helper("/PRIVATE/key", 123) if helper is local_runtime._read_redaction_key else helper()
-            self.assertEqual(caught.exception.code, failure.code)
+                    helper(*args)
+            self.assertEqual(caught.exception.code, error_code)
 
     def _captured_codex_dispatch(self):
         raw = encoded({**request_data(), "derived_processing_until": 2000})

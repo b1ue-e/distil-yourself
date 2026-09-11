@@ -542,15 +542,6 @@ class IngestionTest(unittest.TestCase):
         lark_snapshot = self.snapshot(
             lark_raw, "lark", "1.0.86", native_adapters.LARK_NATIVE_SCHEMA_DIGEST)
 
-        before = inspect_task(self.root)
-        ingestion.preflight_ingestion_slot(
-            self.root, before.generation_id, "lark")
-        after = inspect_task(self.root)
-        self.assertEqual(
-            (after.generation_id, after.manifest_digest, after.state),
-            (before.generation_id, before.manifest_digest, before.state),
-        )
-
         first, first_calls = self.ingest(lark_request, lark_snapshot)
 
         first_state = inspect_task(self.root)
@@ -701,6 +692,33 @@ class IngestionTest(unittest.TestCase):
         self.assertEqual(caught.exception.code, "ingestion-invalid")
         self.assertEqual(calls, [])
 
+    def test_preflight_accepts_supported_kinds_and_releases_its_lease(self):
+        before = inspect_task(self.root)
+        for source_kind in ("lark", "codex"):
+            with self.subTest(source_kind=source_kind):
+                ingestion.preflight_ingestion_slot(
+                    self.root, before.generation_id, source_kind)
+        after = inspect_task(self.root)
+        self.assertEqual(
+            (after.generation_id, after.manifest_digest, after.state),
+            (before.generation_id, before.manifest_digest, before.state),
+        )
+
+    def test_preflight_maps_malformed_generation_identifiers(self):
+        for generation_id in ("", 123):
+            with self.subTest(generation_id=generation_id):
+                with self.assertRaises(ingestion.IngestionError) as caught:
+                    ingestion.preflight_ingestion_slot(
+                        self.root, generation_id, "lark")
+            self.assertEqual(caught.exception.code, "ingestion-failed")
+
+    def test_preflight_rejects_a_held_task_lease(self):
+        with TaskCoordinator(self.root):
+            with self.assertRaises(ingestion.IngestionError) as caught:
+                ingestion.preflight_ingestion_slot(
+                    self.root, self.ingest_state.generation_id, "lark")
+        self.assertEqual(caught.exception.code, "task-busy")
+
     def test_revoked_grant_and_adapter_failure_never_advance_or_leave_staging(self):
         raw = b'{"ok":true,"identity":"user","data":{"content":"safe"}}'
         for revoked, failure in ((True, None), (False, RuntimeError("adapter-failed"))):
@@ -736,11 +754,12 @@ class IngestionTest(unittest.TestCase):
             def __radd__(self, other):
                 return "evidence/substituted.json"
 
-        for kind, generation, code in (
+        rejection_cases = (
                 ("lark", "g-stale", "generation-lineage-mismatch"),
                 ("unknown", self.ingest_state.generation_id, "unsupported-source-kind"),
                 (SourceKindSubclass("lark"), self.ingest_state.generation_id,
-                 "unsupported-source-kind")):
+                 "unsupported-source-kind"))
+        for kind, generation, code in rejection_cases:
             request = ingestion.IngestionRequest(
                 kind, "ingest-preflight", generation, context, grant, attestation,
                 brokers.LarkRequest("doc-token", "3365"), digest("document-token"))
@@ -754,11 +773,7 @@ class IngestionTest(unittest.TestCase):
             self.assertEqual(caught.exception.code, code)
             self.assertEqual(calls, [])
 
-        for kind, generation, code in (
-                ("lark", "g-stale", "generation-lineage-mismatch"),
-                ("unknown", self.ingest_state.generation_id, "unsupported-source-kind"),
-                (SourceKindSubclass("lark"), self.ingest_state.generation_id,
-                 "unsupported-source-kind")):
+        for kind, generation, code in rejection_cases:
             with self.subTest(preflight_kind=kind):
                 with self.assertRaises(ingestion.IngestionError) as caught:
                     ingestion.preflight_ingestion_slot(self.root, generation, kind)
