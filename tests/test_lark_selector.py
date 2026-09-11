@@ -27,7 +27,9 @@ class DocumentSelectorTest(unittest.TestCase):
         self.assertEqual(error.code, "invalid-selector")
         self.assertEqual(error.args, ("invalid-selector",))
         self.assertEqual(str(error), "invalid-selector")
-        self.assertNotIn(str(value), repr(vars(error)))
+        for diagnostic in (str(error), repr(error.args), repr(vars(error))):
+            self.assertNotIn(str(value), diagnostic)
+            self.assertNotIn(TOKEN, diagnostic)
 
     def test_token_and_exact_url_produce_the_same_private_selector(self):
         token = lark_selector.parse_document_selector(TOKEN)
@@ -118,12 +120,18 @@ class DocumentSelectorTest(unittest.TestCase):
             "https://tenant.larkoffice.com:444/docx/" + TOKEN,
             "https://tenant.larkoffice.com/docx/%64" + TOKEN[1:],
             "https://tenant.larkoffice.com/docx/" + TOKEN + "?x=1",
+            "https://tenant.larkoffice.com/docx/" + TOKEN + "?",
             "https://tenant.larkoffice.com/docx/" + TOKEN + "#part",
+            "https://tenant.larkoffice.com/docx/" + TOKEN + "#",
             "https://tenant.larkoffice.com/docx/" + TOKEN + "/",
             "https://tenant.larkoffice.com/wiki/" + TOKEN,
             "https://tenant.larkoffice.com/docx/" + TOKEN + "/child",
             "https://tenant.larkoffice.com/Docx/" + TOKEN,
             "https://tenant.larkoffice.com/docx/" + TOKEN + "\u0080",
+            " https://tenant.larkoffice.com/docx/" + TOKEN,
+            "\thttps://tenant.larkoffice.com/docx/" + TOKEN,
+            "\nhttps://tenant.larkoffice.com/docx/" + TOKEN,
+            "\x00https://tenant.larkoffice.com/docx/" + TOKEN,
         )
         for value in invalid:
             with self.subTest(value=value):

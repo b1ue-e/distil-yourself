@@ -1,8 +1,6 @@
 """Closed local Lark request decoder tests."""
 
 import json
-import socket
-import subprocess
 import sys
 import unittest
 from dataclasses import FrozenInstanceError, MISSING, fields
@@ -38,7 +36,7 @@ def encoded(value=None):
     ).encode("utf-8")
 
 
-class LocalLarkRequestDecoderTest(unittest.TestCase):
+class LarkRequestDecoderTest(unittest.TestCase):
     def assert_invalid(self, raw, secrets=()):
         with self.assertRaises(lark_runtime.LarkRuntimeError) as caught:
             lark_runtime.decode_local_lark_request(raw)
@@ -146,6 +144,23 @@ class LocalLarkRequestDecoderTest(unittest.TestCase):
                 data[field] = subclass(data[field])
                 decode.return_value = data
                 self.assert_invalid(encoded())
+
+    def test_collapses_unexpected_exception_without_private_details(self):
+        with mock.patch.object(
+            adapters,
+            "decode_event_graph_json",
+            side_effect=RuntimeError("PRIVATE-DECODER-DETAIL"),
+        ):
+            self.assert_invalid(encoded(), ("PRIVATE-DECODER-DETAIL", TOKEN))
+
+    def test_propagates_base_exception_control_flow(self):
+        for control_flow in (KeyboardInterrupt(), SystemExit()):
+            with self.subTest(kind=type(control_flow).__name__), mock.patch.object(
+                adapters,
+                "decode_event_graph_json",
+                side_effect=control_flow,
+            ), self.assertRaises(type(control_flow)):
+                lark_runtime.decode_local_lark_request(encoded())
 
     def test_decoding_never_uses_network_subprocess_or_filesystem(self):
         forbidden = RuntimeError("forbidden I/O")
