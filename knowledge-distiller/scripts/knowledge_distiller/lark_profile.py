@@ -241,7 +241,6 @@ def canonical_profile_record():
     return copy.deepcopy(_PROFILE_RECORD)
 
 
-_COMPUTED_PROFILE_DIGEST = canonical_digest(_PROFILE_RECORD)
 PINNED_PROFILE_DIGEST = (
     "sha256:cf7407c4e2f4b2f71f8352ad19eaaaf96b6fbec12a365e7730ff939814439b82"
 )
@@ -267,29 +266,51 @@ class PinnedLarkProfile:
     canonical_digest: str
 
 
-_PINNED_PROFILE = PinnedLarkProfile(
-    status=STATUS,
-    product=PRODUCT,
-    adapter_version=ADAPTER_VERSION,
-    product_version=PRODUCT_VERSION,
-    native_schema_version=NATIVE_SCHEMA_VERSION,
-    control_schema_digests=tuple(sorted(_CONTROL_SCHEMA_DIGESTS.items())),
-    native_schema_digest=native_adapters.LARK_NATIVE_SCHEMA_DIGEST,
-    read_scope_alternatives=tuple(sorted(READ_SCOPE_ALTERNATIVES)),
-    metadata_scope_alternatives=tuple(sorted(METADATA_SCOPE_ALTERNATIVES)),
-    timeout_seconds=TIMEOUT_SECONDS,
-    control_stdout_limit=CONTROL_STDOUT_LIMIT,
-    raw_stdout_limit=RAW_STDOUT_LIMIT,
-    stderr_limit=STDERR_LIMIT,
-    endpoint_integrity_status="unverified",
-    consistency_mode="unaccepted",
-    canonical_digest=_COMPUTED_PROFILE_DIGEST,
-)
+def _verified_profile_record():
+    try:
+        record = canonical_profile_record()
+        if canonical_digest(record) != PINNED_PROFILE_DIGEST:
+            raise RuntimeError
+        return record
+    except Exception:
+        raise RuntimeError("invalid-lark-profile") from None
+
+
+def _load_control_schema(name):
+    """Load one descriptor only when both it and its profile remain pinned."""
+
+    try:
+        record = _verified_profile_record()
+        descriptor = copy.deepcopy(_CONTROL_SCHEMAS[name])
+        if canonical_digest(descriptor) != record["control_schema_digests"][name]:
+            raise RuntimeError
+        return descriptor["schema"]
+    except Exception:
+        raise RuntimeError("invalid-lark-profile") from None
 
 
 def load_pinned_profile():
     """Load the code-pinned profile, refusing an unreviewed record change."""
 
-    if _COMPUTED_PROFILE_DIGEST != PINNED_PROFILE_DIGEST:
-        raise RuntimeError("invalid-lark-profile")
-    return _PINNED_PROFILE
+    record = _verified_profile_record()
+    try:
+        return PinnedLarkProfile(
+            status=record["status"],
+            product=record["product"],
+            adapter_version=record["adapter_version"],
+            product_version=record["product_version"],
+            native_schema_version=record["native_schema_version"],
+            control_schema_digests=tuple(sorted(record["control_schema_digests"].items())),
+            native_schema_digest=record["native_schema_digest"],
+            read_scope_alternatives=tuple(record["scope_alternatives"]["read"]),
+            metadata_scope_alternatives=tuple(record["scope_alternatives"]["metadata"]),
+            timeout_seconds=record["limits"]["timeout_seconds"],
+            control_stdout_limit=record["limits"]["control_stdout_bytes"],
+            raw_stdout_limit=record["limits"]["raw_stdout_bytes"],
+            stderr_limit=record["limits"]["stderr_bytes"],
+            endpoint_integrity_status=record["endpoint_integrity"]["status"],
+            consistency_mode=record["consistency"]["mode"],
+            canonical_digest=PINNED_PROFILE_DIGEST,
+        )
+    except Exception:
+        raise RuntimeError("invalid-lark-profile") from None

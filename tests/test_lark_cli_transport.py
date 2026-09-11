@@ -102,6 +102,65 @@ class LarkProfileTest(unittest.TestCase):
             profile.status = "live-enabled"
         self.assertNotIn(OWNER, repr(profile))
 
+    def test_profile_is_derived_from_the_verified_record_without_parallel_cache(self):
+        self.assertFalse(hasattr(lark_profile, "_PINNED_PROFILE"))
+        self.assertFalse(hasattr(lark_profile, "_COMPUTED_PROFILE_DIGEST"))
+        record = lark_profile.canonical_profile_record()
+        profile = lark_profile.load_pinned_profile()
+        self.assertEqual(profile.status, record["status"])
+        self.assertEqual(profile.product, record["product"])
+        self.assertEqual(profile.adapter_version, record["adapter_version"])
+        self.assertEqual(profile.product_version, record["product_version"])
+        self.assertEqual(profile.native_schema_version, record["native_schema_version"])
+        self.assertEqual(
+            profile.control_schema_digests,
+            tuple(sorted(record["control_schema_digests"].items())),
+        )
+        self.assertEqual(profile.native_schema_digest, record["native_schema_digest"])
+        self.assertEqual(
+            profile.read_scope_alternatives,
+            tuple(record["scope_alternatives"]["read"]),
+        )
+        self.assertEqual(
+            profile.metadata_scope_alternatives,
+            tuple(record["scope_alternatives"]["metadata"]),
+        )
+        self.assertEqual(profile.timeout_seconds, record["limits"]["timeout_seconds"])
+        self.assertEqual(
+            profile.control_stdout_limit,
+            record["limits"]["control_stdout_bytes"],
+        )
+        self.assertEqual(profile.raw_stdout_limit, record["limits"]["raw_stdout_bytes"])
+        self.assertEqual(profile.stderr_limit, record["limits"]["stderr_bytes"])
+        self.assertEqual(
+            profile.endpoint_integrity_status,
+            record["endpoint_integrity"]["status"],
+        )
+        self.assertEqual(profile.consistency_mode, record["consistency"]["mode"])
+        self.assertEqual(profile.canonical_digest, lark_profile.canonical_digest(record))
+
+    def test_internal_profile_record_mutation_fails_closed_and_is_restored(self):
+        original = copy.deepcopy(lark_profile._PROFILE_RECORD)
+        try:
+            lark_profile._PROFILE_RECORD["status"] = "live-enabled"
+            with self.assertRaises(RuntimeError) as caught:
+                lark_profile.load_pinned_profile()
+            self.assertEqual(caught.exception.args, ("invalid-lark-profile",))
+        finally:
+            lark_profile._PROFILE_RECORD.clear()
+            lark_profile._PROFILE_RECORD.update(original)
+        self.assertEqual(lark_profile.load_pinned_profile().status, "synthetic-only")
+
+    def test_public_profile_and_schema_copies_are_isolated(self):
+        record = lark_profile.canonical_profile_record()
+        record["status"] = "live-enabled"
+        record["limits"]["timeout_seconds"] = 1
+        schemas = lark_profile.control_schema_descriptors()
+        schemas["auth-status"]["schema"]["properties"]["identity"]["const"] = "bot"
+        self.assertEqual(lark_profile.load_pinned_profile().status, "synthetic-only")
+        self.assertEqual(lark_profile.load_pinned_profile().timeout_seconds, 30)
+        self.assertEqual(transport.parse_verified_identity(AUTH_FIXTURE).open_id, OWNER)
+
     def test_fixtures_are_synthetic_and_contain_no_live_selector(self):
         for path in sorted(FIXTURES.iterdir()):
             raw = path.read_bytes()
@@ -318,6 +377,18 @@ class LarkControlParserTest(unittest.TestCase):
         document["data"]["document"]["revision_id"] = _IntSubclass(7)
         with mock.patch.object(transport.adapters, "decode_event_graph_json", side_effect=(document, decoded(METADATA_FIXTURE))):
             self.reject(lambda: transport.parse_observation(b"{}", b"{}", TOKEN))
+
+    def test_internal_control_schema_mutation_fails_closed_and_is_restored(self):
+        original = copy.deepcopy(lark_profile._CONTROL_SCHEMAS)
+        try:
+            schema = lark_profile._CONTROL_SCHEMAS["auth-status"]["schema"]
+            user = schema["properties"]["identities"]["properties"]["user"]
+            user["properties"]["display_name"]["max_length"] = 512
+            self.reject(lambda: transport.parse_verified_identity(AUTH_FIXTURE))
+        finally:
+            lark_profile._CONTROL_SCHEMAS.clear()
+            lark_profile._CONTROL_SCHEMAS.update(original)
+        self.assertEqual(transport.parse_verified_identity(AUTH_FIXTURE).open_id, OWNER)
 
     def test_typed_missing_scope_is_accepted_without_free_text_matching(self):
         self.assertEqual(

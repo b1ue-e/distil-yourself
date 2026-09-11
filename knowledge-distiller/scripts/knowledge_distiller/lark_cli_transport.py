@@ -107,7 +107,7 @@ def _decode(raw, schema_name):
         _fail()
     try:
         value = adapters.decode_event_graph_json(raw)
-        schema = lark_profile._CONTROL_SCHEMAS[schema_name]["schema"]
+        schema = lark_profile._load_control_schema(schema_name)
         _validate(value, schema)
         return value
     except LarkTransportError:
