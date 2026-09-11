@@ -64,6 +64,33 @@ class DocumentSelectorTest(unittest.TestCase):
                     TOKEN,
                 )
 
+    def test_accepts_consecutive_interior_label_hyphens(self):
+        selector = lark_selector.parse_document_selector(
+            "https://team--one.larkoffice.com/docx/" + TOKEN
+        )
+
+        self.assertEqual(selector.token, TOKEN)
+
+    def test_enforces_dns_label_and_hostname_length_boundaries(self):
+        label_63 = "a" + ("b" * 61) + "c"
+        label_64 = label_63 + "d"
+        host_253 = ".".join(
+            ("a" * 63, "b" * 63, "c" * 63, "d" * 46, "larkoffice", "com")
+        )
+        self.assertEqual(len(host_253), 253)
+
+        for host in (label_63 + ".larkoffice.com", host_253):
+            with self.subTest(accepted_host_length=len(host)):
+                self.assertEqual(
+                    lark_selector.parse_document_selector(
+                        "https://%s/docx/%s" % (host, TOKEN)
+                    ).token,
+                    TOKEN,
+                )
+        for host in (label_64 + ".larkoffice.com", host_253.replace("d" * 46, "d" * 47)):
+            with self.subTest(rejected_host_length=len(host)):
+                self.assert_invalid("https://%s/docx/%s" % (host, TOKEN))
+
     def test_rejects_noncanonical_tokens_and_non_string_scalars(self):
         class TextSubclass(str):
             __slots__ = ()

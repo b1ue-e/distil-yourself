@@ -6,9 +6,9 @@ import re
 
 
 TOKEN = re.compile(r"[A-Za-z0-9]{27}\Z")
-_LABEL = r"[a-z0-9]+(?:-[a-z0-9]+)*"
+_LABEL = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
 _URL = re.compile(
-    r"https://(?:" + _LABEL + r"\.)+(?:larkoffice\.com|larksuite\.com|feishu\.cn)"
+    r"https://(?P<host>(?:" + _LABEL + r"\.)+(?:larkoffice\.com|larksuite\.com|feishu\.cn))"
     r"/docx/(?P<token>[A-Za-z0-9]{27})\Z"
 )
 _COMMITMENT_PREFIX = b"lark-docx-selector/v1\0"
@@ -55,7 +55,7 @@ def parse_document_selector(value):
         token = value
     elif value.isascii():
         match = _URL.fullmatch(value)
-        if match is None:
+        if match is None or len(match.group("host")) > 253:
             raise SelectorError("invalid-selector")
         token = match.group("token")
     else:
