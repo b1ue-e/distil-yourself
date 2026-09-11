@@ -28,7 +28,7 @@ def read_redaction_key(path, uid: int) -> bytes:
             expected_owner_uid=uid,
             owner_only=True,
         )
-    except Exception:
+    except source_io.SourceIOError:
         raise RuntimeSupportError("unsafe-redaction-key") from None
     if type(raw) is not bytes or not 32 <= len(raw) <= 64:
         raise RuntimeSupportError("unsafe-redaction-key")

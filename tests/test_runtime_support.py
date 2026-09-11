@@ -27,7 +27,7 @@ class RuntimeSupportTest(unittest.TestCase):
         private = "/PRIVATE/redaction-key"
         for failure in (
                 source_io.SourceIOError("PRIVATE-SOURCE-DETAIL"),
-                RuntimeError("PRIVATE-UNEXPECTED-DETAIL"), b"k" * 31, b"k" * 65):
+                b"k" * 31, b"k" * 65):
             with self.subTest(failure=type(failure).__name__), mock.patch.object(
                     source_io, "read_source",
                     side_effect=failure if isinstance(failure, Exception) else None,
@@ -37,6 +37,12 @@ class RuntimeSupportTest(unittest.TestCase):
             self.assertEqual(caught.exception.code, "unsafe-redaction-key")
             self.assertNotIn(private, str(caught.exception))
             self.assertNotIn("PRIVATE", str(caught.exception))
+
+        unexpected = RuntimeError("PRIVATE-UNEXPECTED-DETAIL")
+        with mock.patch.object(source_io, "read_source", side_effect=unexpected), \
+                self.assertRaises(RuntimeError) as caught:
+            runtime_support.read_redaction_key(private, 123)
+        self.assertIs(caught.exception, unexpected)
 
     def test_reads_only_valid_builtin_uid_and_time_values(self):
         with mock.patch.object(runtime_support.os, "geteuid", return_value=123), \

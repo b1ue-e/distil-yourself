@@ -476,6 +476,21 @@ class LocalRuntimeBoundaryTest(unittest.TestCase):
             self.assertNotIn(private, str(caught.exception))
             self.assertNotIn("PRIVATE-SOURCE-DETAIL", str(caught.exception))
 
+    def test_public_runtime_preserves_source_errors_and_collapses_unexpected_key_failures(self):
+        raw = encoded({**request_data(), "derived_processing_until": 2000})
+        for failure, expected in (
+                (source_io.SourceIOError("PRIVATE-SOURCE-DETAIL"), "unsafe-redaction-key"),
+                (RuntimeError("PRIVATE-UNEXPECTED-DETAIL"), "local-runtime-failed")):
+            with self.subTest(failure=type(failure).__name__), \
+                    mock.patch.object(os, "geteuid", return_value=123), \
+                    mock.patch.object(time, "time", return_value=1000), \
+                    mock.patch.object(source_io, "read_source", side_effect=failure):
+                with self.assertRaises(local_runtime.LocalRuntimeError) as caught:
+                    local_runtime.ingest_codex_session(
+                        "/PRIVATE/task", raw, "/PRIVATE/key")
+            self.assertEqual(caught.exception.code, expected)
+            self.assertNotIn("PRIVATE", str(caught.exception))
+
     def test_public_runtime_decodes_before_identity_and_key_access(self):
         with mock.patch.object(os, "geteuid", side_effect=AssertionError("identity accessed")), \
                 mock.patch.object(source_io, "read_source") as reader:
