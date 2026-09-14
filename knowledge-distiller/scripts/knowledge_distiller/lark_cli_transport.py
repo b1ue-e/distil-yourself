@@ -195,6 +195,17 @@ def parse_missing_scope(raw):
     return tuple(value["error"]["missing_scopes"])
 
 
+def broker_raw_argv(selector):
+    """Return the one broker command accepted for this parsed selector."""
+
+    selector = LarkCliTransport._selector(selector)
+    return (
+        "lark-cli", "api", "GET",
+        "/open-apis/docx/v1/documents/" + selector.token + "/raw_content",
+        "--as", "user",
+    )
+
+
 @dataclass(frozen=True, repr=False)
 class _ExecutableFingerprint:
     canonical_path: str
@@ -530,12 +541,8 @@ class LarkCliTransport:
         return parse_observation(document, metadata, selector.token)
 
     def raw_content(self, selector):
-        selector = self._selector(selector)
+        arguments = broker_raw_argv(selector)[1:]
         return self._run(
-            (
-                "api", "GET",
-                "/open-apis/docx/v1/documents/" + selector.token + "/raw_content",
-                "--as", "user",
-            ),
+            arguments,
             stdout_limit=self._profile.raw_stdout_limit,
         )
