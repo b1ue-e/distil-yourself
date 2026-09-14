@@ -412,7 +412,7 @@ git commit -m "feat: pin synthetic Lark control schemas"
 - Modify: `knowledge-distiller/scripts/knowledge_distiller/lark_cli_transport.py`
 - Modify: `tests/test_lark_cli_transport.py`
 
-- [ ] **Step 1: Write failing process-boundary tests**
+- [x] **Step 1: Write failing process-boundary tests**
 
 Create an executable fixture in an owner-only temporary directory and assert the exact command records:
 
@@ -443,7 +443,7 @@ def test_transport_uses_only_fixed_commands_and_canonical_drive_stdin(self):
 
 Add cases for missing/relative/dangling PATH entry, unrecognized wrapper layout, missing native binary, directory/world-writable native executable, version mismatch, fingerprint replacement before/after a call, inherited proxy/API-base/credential variables, shell invocation, timeout, stdout/stderr overflow, partial output, nonzero exit, cancellation, descendant survival, and descriptor/process leaks. Assert every diagnostic is an allowlisted code without fixture content, token, path, Open ID, title, argv, stdout, or stderr. Patch the wrapper fixture so its execution raises immediately, proving the transport never triggers its auto-download behavior.
 
-- [ ] **Step 2: Run transport tests red**
+- [x] **Step 2: Run transport tests red**
 
 Run:
 
@@ -454,7 +454,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest \
 
 Expected: FAIL because executable resolution and bounded execution are absent.
 
-- [ ] **Step 3: Implement fixed executable and streaming process control**
+- [x] **Step 3: Implement fixed executable and streaming process control**
 
 Create a frozen executable fingerprint containing canonical path, device, inode, UID, mode, size, and nanosecond modification time. Resolve `lark-cli` once with `shutil.which`. Accept a direct native executable, or recognize the packaged `scripts/run.js` PATH entry and derive its already-present sibling `bin/lark-cli`; never execute the Node wrapper or any install script. Reject dangling links, an unrecognized wrapper layout, a missing native target, and non-regular or group/other-writable native targets. Execute the canonical native path directly and restat it before and after every call.
 
@@ -516,7 +516,7 @@ class LarkCliTransport:
 
 `observe` executes Docx basic information then Drive metadata once. `raw_content` returns bounded opaque bytes without JSON parsing. No retry exists.
 
-- [ ] **Step 4: Run process tests green, including cleanup**
+- [x] **Step 4: Run process tests green, including cleanup**
 
 Run:
 
@@ -527,7 +527,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 -W error::ResourceWarning -m unittest \
 
 Expected: PASS; timeout/overflow fixtures and their descendants are gone, all pipes are closed, and no real `lark-cli` or network operation runs.
 
-- [ ] **Step 5: Commit the transport**
+- [x] **Step 5: Commit the transport**
 
 ```bash
 git add knowledge-distiller/scripts/knowledge_distiller/lark_cli_transport.py \
