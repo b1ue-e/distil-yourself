@@ -7,7 +7,7 @@ from pathlib import Path
 
 from . import (
     adapters, authorization, brokers, ingestion, lark_cli_transport,
-    lark_profile, runtime_support,
+    lark_profile, persistence, runtime_support,
 )
 from .journal import canonical_json
 from .lark_cli_transport import LarkCliTransport
@@ -103,6 +103,31 @@ def _decision_digest(record):
     return "sha256:" + hashlib.sha256(canonical_json(record)).hexdigest()
 
 
+def _safe_persistence_id(value):
+    if type(value) is not str:
+        raise LarkRuntimeError("invalid-lark-request")
+    try:
+        return persistence._require_id(value)
+    except persistence.TaskPersistenceError:
+        raise LarkRuntimeError("invalid-lark-request") from None
+
+
+def _absolute_task_root(task_root):
+    try:
+        supplied = os.fspath(task_root)
+        if type(supplied) is not str or "\0" in supplied:
+            raise ValueError
+        absolute = os.path.abspath(supplied)
+        if type(absolute) is not str or "\0" in absolute:
+            raise ValueError
+        encoded = absolute.encode("utf-8")
+        if b"\0" in encoded:
+            raise ValueError
+        return absolute, encoded
+    except Exception:
+        raise LarkRuntimeError("local-identity-unavailable") from None
+
+
 def _validate_runtime_inputs(request, parsed_selector, identity, before, now):
     _closed(request, LocalLarkRequest)
     _closed(parsed_selector, ParsedDocumentSelector)
@@ -114,8 +139,8 @@ def _validate_runtime_inputs(request, parsed_selector, identity, before, now):
             or request.schema_version != REQUEST_SCHEMA
         ):
             raise ValueError
-        adapters._identifier(request.transaction_id, "/")
-        adapters._identifier(request.expected_generation_id, "/")
+        _safe_persistence_id(request.transaction_id)
+        _safe_persistence_id(request.expected_generation_id)
         canonical_selector = parse_document_selector(request.document_selector)
         verified_identity = lark_cli_transport.VerifiedUser(
             identity.open_id, identity.scopes,
@@ -158,7 +183,7 @@ def materialize_local_lark_request(
 
     _validate_runtime_inputs(request, parsed_selector, identity, before, now)
     try:
-        task_path = os.path.abspath(os.fspath(task_root)).encode("utf-8")
+        task_path = _absolute_task_root(task_root)[1]
         open_id = identity.open_id.encode("utf-8")
         generation = request.expected_generation_id.encode("utf-8")
     except Exception:
@@ -335,7 +360,7 @@ def _credential_resolver(materialized, **values):
 
 
 def _trusted_runner(transport, profile, parsed_selector, before, materialized):
-    expected_argv = lark_cli_transport.broker_raw_argv(parsed_selector)
+    expected_argv = lark_cli_transport._broker_raw_argv(parsed_selector)
     expected_options = {
         "env": {},
         "shell": False,
@@ -392,8 +417,9 @@ def _ingest_lark_document(
 ):
     request = decode_local_lark_request(raw_request)
     parsed_selector = parse_document_selector(request.document_selector)
+    absolute_task_root, _ = _absolute_task_root(task_root)
     ingestion.preflight_ingestion_slot(
-        Path(task_root), request.expected_generation_id, "lark",
+        Path(absolute_task_root), request.expected_generation_id, "lark",
     )
     uid = _effective_uid()
     key = _read_redaction_key(redaction_key_file, uid)
@@ -416,7 +442,7 @@ def _ingest_lark_document(
         raise LarkRuntimeError("lark-missing-scope")
     before = _observation(transport, parsed_selector)
     materialized = materialize_local_lark_request(
-        task_root, request, parsed_selector, identity, before, now,
+        absolute_task_root, request, parsed_selector, identity, before, now,
     )
 
     def acquire_lark(native_request, grant, attestation, context):
@@ -443,7 +469,7 @@ def _ingest_lark_document(
         raise ingestion.IngestionError("unsupported-source-kind")
 
     return ingestion.ingest_source(
-        Path(task_root),
+        Path(absolute_task_root),
         materialized.request,
         acquire=ingestion.AcquisitionDispatch(
             lark=acquire_lark,
@@ -482,9 +508,9 @@ def decode_local_lark_request(raw):
             or request["schema_version"] != REQUEST_SCHEMA
         ):
             raise ValueError
-        transaction_id = adapters._identifier(request["transaction_id"], "/transaction_id")
-        expected_generation_id = adapters._identifier(
-            request["expected_generation_id"], "/expected_generation_id"
+        transaction_id = _safe_persistence_id(request["transaction_id"])
+        expected_generation_id = _safe_persistence_id(
+            request["expected_generation_id"]
         )
         selector = parse_document_selector(request["document_selector"])
         derived_processing_until = request["derived_processing_until"]

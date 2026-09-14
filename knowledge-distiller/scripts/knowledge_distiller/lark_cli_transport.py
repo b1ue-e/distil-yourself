@@ -195,7 +195,7 @@ def parse_missing_scope(raw):
     return tuple(value["error"]["missing_scopes"])
 
 
-def broker_raw_argv(selector):
+def _broker_raw_argv(selector):
     """Return the one broker command accepted for this parsed selector."""
 
     selector = LarkCliTransport._selector(selector)
@@ -541,7 +541,7 @@ class LarkCliTransport:
         return parse_observation(document, metadata, selector.token)
 
     def raw_content(self, selector):
-        arguments = broker_raw_argv(selector)[1:]
+        arguments = _broker_raw_argv(selector)[1:]
         return self._run(
             arguments,
             stdout_limit=self._profile.raw_stdout_limit,

@@ -34,6 +34,7 @@ OTHER_OWNER = "ou_SYNTHETIC_OTHER"
 TITLE = "SYNTHETIC_PRIVATE_TITLE"
 RAW_TEXT = "password=SYNTHETIC_PRIVATE_RAW_TEXT"
 OPEN_ID_DIAGNOSTIC = "SYNTHETIC_PRIVATE_OPEN_ID_DIAGNOSTIC"
+SCOPES = ("docx:document:readonly", "drive:drive.metadata:readonly")
 EXPECTED_FLOW = (
     "version", "verify-before", "observe-before",
     "verify-acquire", "raw-content", "observe-after",
@@ -42,6 +43,14 @@ EXPECTED_FLOW = (
 
 class _StringSubclass(str):
     pass
+
+
+class _UnsafePath:
+    def __init__(self, value):
+        self.value = value
+
+    def __fspath__(self):
+        return self.value
 
 
 def request_data():
@@ -172,6 +181,26 @@ class LarkRequestDecoderTest(unittest.TestCase):
                 decode.return_value = data
                 self.assert_invalid(encoded())
 
+    def test_rejects_ids_outside_the_persistence_safe_grammar(self):
+        invalid_ids = (
+            "contains/slash", "contains\0nul", "-leading", ".leading",
+            "x" * 129, _StringSubclass("generation-1"),
+        )
+        for field in ("transaction_id", "expected_generation_id"):
+            for value in invalid_ids:
+                with self.subTest(field=field, kind=type(value).__name__):
+                    data = request_data()
+                    if type(value) is _StringSubclass:
+                        with mock.patch.object(
+                            adapters, "decode_event_graph_json", return_value={
+                                **data, field: value,
+                            },
+                        ):
+                            self.assert_invalid(encoded())
+                    else:
+                        data[field] = value
+                        self.assert_invalid(encoded(data))
+
     def test_collapses_unexpected_exception_without_private_details(self):
         with mock.patch.object(
             adapters,
@@ -224,8 +253,7 @@ class SyntheticTransport:
         self.version_value = version or self.profile.product_version
         self.identities = list(identities or (
             lark_cli_transport.VerifiedUser(
-                OWNER,
-                ("docx:document:readonly", "drive:drive.metadata:readonly"),
+                OWNER, SCOPES,
             ),
         ) * 2)
         self.observations = list(observations or (
@@ -281,8 +309,7 @@ class LarkMaterializationTest(unittest.TestCase):
         )
         selector = selector or lark_runtime.parse_document_selector(TOKEN)
         identity = identity or lark_cli_transport.VerifiedUser(
-            OWNER,
-            ("docx:document:readonly", "drive:drive.metadata:readonly"),
+            OWNER, SCOPES,
         )
         observation = observation or lark_cli_transport.LarkObservation(
             TOKEN, "7", OWNER,
@@ -417,6 +444,44 @@ class LarkMaterializationTest(unittest.TestCase):
                     1000,
                 )
             self.assertEqual(caught.exception.code, "invalid-lark-request")
+
+    def test_rejects_unsafe_ids_and_ambiguous_nul_framing_when_called_directly(self):
+        base = lark_runtime.LocalLarkRequest(
+            lark_runtime.REQUEST_SCHEMA, "transaction-1", "generation-1",
+            TOKEN, 2000,
+        )
+        selector = lark_runtime.parse_document_selector(TOKEN)
+        identity = lark_cli_transport.VerifiedUser(OWNER, ("scope",))
+        observation = lark_cli_transport.LarkObservation(TOKEN, "7", OWNER)
+        old_left = (
+            os.path.abspath("/synthetic/task\0suffix").encode("utf-8")
+            + b"\0g"
+        )
+        old_right = (
+            os.path.abspath("/synthetic/task").encode("utf-8")
+            + b"\0suffix\0g"
+        )
+        self.assertEqual(old_left, old_right)
+        cases = (
+            ("/synthetic/task\0suffix", replace(base, expected_generation_id="g")),
+            ("/synthetic/task", replace(base, expected_generation_id="suffix\0g")),
+            ("/synthetic/task", replace(base, transaction_id="unsafe/tx")),
+            ("/synthetic/task", replace(base, transaction_id="unsafe\0tx")),
+            (_UnsafePath(b"/synthetic/bytes"), base),
+            (_UnsafePath(_StringSubclass("/synthetic/subclass")), base),
+        )
+        for root, request in cases:
+            with self.subTest(root_type=type(root).__name__), self.assertRaises(
+                lark_runtime.LarkRuntimeError
+            ) as caught:
+                lark_runtime.materialize_local_lark_request(
+                    root, request, selector, identity, observation, 1000,
+                )
+            self.assertIn(caught.exception.code, {
+                "invalid-lark-request", "local-identity-unavailable",
+            })
+            for private in ("suffix", "unsafe/tx", "subclass"):
+                self.assertNotIn(private, str(caught.exception))
 
         tampered_request = replace(base, schema_version="PRIVATE-SCHEMA")
         tampered_identity = lark_cli_transport.VerifiedUser(OWNER, ("scope",))
@@ -603,6 +668,36 @@ class LarkStableIngestionTest(unittest.TestCase):
             constructor.assert_not_called()
         self.assertEqual(first_transport.raw_calls, 1)
 
+    def test_invalid_ids_and_task_paths_fail_before_transport_and_keep_generation(self):
+        invalid_requests = []
+        for field, value in (
+            ("transaction_id", "unsafe/transaction"),
+            ("transaction_id", "unsafe\0transaction"),
+            ("expected_generation_id", "unsafe/generation"),
+            ("expected_generation_id", "suffix\0generation"),
+        ):
+            data = json.loads(self.raw_request().decode("utf-8"))
+            data[field] = value
+            invalid_requests.append((self.root, canonical_json(data)))
+        invalid_requests.append((
+            _UnsafePath(str(self.root) + "\0suffix"), self.raw_request(),
+        ))
+
+        before = inspect_task(self.root).generation_id
+        for task_root, raw in invalid_requests:
+            with self.subTest(root_type=type(task_root).__name__), mock.patch.object(
+                lark_runtime, "LarkCliTransport",
+            ) as constructor:
+                with self.assertRaises(lark_runtime.LarkRuntimeError) as caught:
+                    lark_runtime.ingest_lark_document(
+                        task_root, raw, str(self.key_path), allow_live_read=True,
+                    )
+                self.assertIn(caught.exception.code, {
+                    "invalid-lark-request", "local-identity-unavailable",
+                })
+                constructor.assert_not_called()
+                self.assertEqual(inspect_task(self.root).generation_id, before)
+
     def test_identity_version_scope_owner_deadline_and_key_reject_before_raw(self):
         cases = (
             (SyntheticTransport(version="9.9.9"), None, "lark-cli-incompatible"),
@@ -643,9 +738,7 @@ class LarkStableIngestionTest(unittest.TestCase):
         self.assertEqual(transport.raw_calls, 0)
 
     def test_acquisition_rejects_identity_or_observation_change_without_commit(self):
-        tampered_identity = lark_cli_transport.VerifiedUser(OWNER, (
-            "docx:document:readonly", "drive:drive.metadata:readonly",
-        ))
+        tampered_identity = lark_cli_transport.VerifiedUser(OWNER, SCOPES)
         object.__setattr__(tampered_identity, "open_id", _StringSubclass(OWNER))
         tampered_observation = lark_cli_transport.LarkObservation(
             TOKEN, "7", OWNER,
@@ -653,17 +746,11 @@ class LarkStableIngestionTest(unittest.TestCase):
         object.__setattr__(tampered_observation, "revision", _StringSubclass("7"))
         cases = (
             SyntheticTransport(identities=(
-                lark_cli_transport.VerifiedUser(OWNER, (
-                    "docx:document:readonly", "drive:drive.metadata:readonly",
-                )),
-                lark_cli_transport.VerifiedUser(OTHER_OWNER, (
-                    "docx:document:readonly", "drive:drive.metadata:readonly",
-                )),
+                lark_cli_transport.VerifiedUser(OWNER, SCOPES),
+                lark_cli_transport.VerifiedUser(OTHER_OWNER, SCOPES),
             )),
             SyntheticTransport(identities=(
-                lark_cli_transport.VerifiedUser(OWNER, (
-                    "docx:document:readonly", "drive:drive.metadata:readonly",
-                )),
+                lark_cli_transport.VerifiedUser(OWNER, SCOPES),
                 tampered_identity,
             )),
             SyntheticTransport(observations=(
@@ -787,7 +874,7 @@ class LarkStableIngestionTest(unittest.TestCase):
             "--as", "user",
         )
         self.assertEqual(
-            lark_cli_transport.broker_raw_argv(
+            lark_cli_transport._broker_raw_argv(
                 lark_runtime.parse_document_selector(TOKEN)
             ),
             expected_argv,
