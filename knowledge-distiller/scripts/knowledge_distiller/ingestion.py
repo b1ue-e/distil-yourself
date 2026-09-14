@@ -7,7 +7,10 @@ from pathlib import Path
 import re
 from typing import Any, Callable
 
-from . import adapters, authorization, brokers, native_adapters, redaction, sources
+from . import (
+    adapters, authorization, brokers, lark_selector, native_adapters,
+    redaction, sources,
+)
 from .journal import canonical_json
 from .persistence import TaskCoordinator, TaskPersistenceError
 from .state import Event, Phase, TransitionFacts
@@ -264,14 +267,26 @@ def _validated_snapshot(snapshot, request, selector_key):
     if request.source_kind == "lark":
         native_request = request.native_request
         try:
-            _, selector_matches, expected_selector_digest = (
-                brokers._lark_selector_binding(
-                    native_request.selector, context.selector))
-        except brokers.BrokerError:
+            parsed = lark_selector.parse_document_selector(
+                native_request.selector)
+        except (TypeError, ValueError, RecursionError):
             _fail("invalid-broker-request")
+        revision = native_request.revision
+        if (type(revision) is not str or len(revision) > 20
+                or re.fullmatch(r"(?:0|[1-9][0-9]*)", revision) is None):
+            _fail("invalid-broker-request")
+        committed_selector = (type(context.selector) is str and re.fullmatch(
+            r"sha256:[0-9a-f]{64}", context.selector) is not None)
+        if committed_selector:
+            selector_matches = hmac.compare_digest(
+                parsed.commitment, context.selector)
+            expected_selector_digest = context.selector
+        else:
+            selector_matches = native_request.selector == context.selector
+            expected_selector_digest = _digest(context.selector)
         if (not selector_matches
                 or snapshot.selector_digest != expected_selector_digest
-                or native_request.revision != context.revision
+                or revision != context.revision
                 or context.session_range is not None):
             _fail("broker-evidence-mismatch")
     else:

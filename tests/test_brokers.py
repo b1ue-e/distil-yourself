@@ -329,6 +329,20 @@ class BrokerTest(unittest.TestCase):
         with mock.patch.object(brokers, "MAX_GRAPH_BYTES", 32):
             self.reject(self.fetch, "broker-response-too-large")
 
+    def test_snapshot_selector_digest_override_is_closed(self):
+        evidence = brokers.NativeEvidence(
+            "lark", "synthetic-1", digest(b"synthetic-schema"), None)
+
+        class DigestSubclass(str):
+            pass
+
+        for value in (True, DigestSubclass(digest(b"selector")), "not-a-digest"):
+            with self.subTest(value_type=type(value).__name__):
+                self.reject(
+                    lambda value=value: brokers._snapshot(
+                        b"{}", self.context, evidence, value),
+                    "broker-response-invalid")
+
     def local(self):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)

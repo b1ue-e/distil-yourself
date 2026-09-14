@@ -182,6 +182,80 @@ class IngestionTest(unittest.TestCase):
         self.assertNotIn(TOKEN.encode("ascii"), generation_bytes)
         self.assertNotIn(DOCUMENT_URL.encode("ascii"), generation_bytes)
 
+    def test_lark_snapshot_binding_is_independent_of_broker_helper(self):
+        raw = b'{"ok":true,"identity":"user","data":{"content":"safe"}}'
+        committed = lark_selector.parse_document_selector(TOKEN)
+        context, grant, attestation = self.authorization(
+            committed.commitment, revision="3365")
+        request = ingestion.IngestionRequest(
+            "lark", "ingest-independent-binding",
+            self.ingest_state.generation_id, context, grant, attestation,
+            brokers.LarkRequest(TOKEN, "3365"), digest("document-token"))
+        acquired = replace(
+            self.snapshot(
+                raw, "lark", "1.0.86",
+                native_adapters.LARK_NATIVE_SCHEMA_DIGEST),
+            selector_digest=digest(committed.commitment))
+
+        with mock.patch.object(
+                brokers, "_lark_selector_binding",
+                side_effect=AssertionError("broker helper must not be used")) as helper, \
+             mock.patch.object(
+                 ingestion, "_normalize", wraps=ingestion._normalize) as normalize:
+            with self.assertRaises(ingestion.IngestionError) as caught:
+                self.ingest(request, acquired)
+
+        self.assertEqual(caught.exception.code, "broker-evidence-mismatch")
+        helper.assert_not_called()
+        normalize.assert_not_called()
+        self.assertEqual(
+            inspect_task(self.root).generation_id,
+            self.ingest_state.generation_id)
+
+    def test_lark_revision_is_independently_typed_and_bound(self):
+        class RevisionSubclass(str):
+            def __eq__(self, other):
+                return True
+
+            def __ne__(self, other):
+                return False
+
+        raw = b'{"ok":true,"identity":"user","data":{"content":"safe"}}'
+        committed = lark_selector.parse_document_selector(TOKEN)
+        context, grant, attestation = self.authorization(
+            committed.commitment, revision="3365")
+        acquired = replace(
+            self.snapshot(
+                raw, "lark", "1.0.86",
+                native_adapters.LARK_NATIVE_SCHEMA_DIGEST),
+            selector_digest=committed.commitment)
+        cases = (
+            (True, "invalid-broker-request"),
+            (3365, "invalid-broker-request"),
+            (None, "invalid-broker-request"),
+            ("", "invalid-broker-request"),
+            ("03365", "invalid-broker-request"),
+            ("-1", "invalid-broker-request"),
+            ("1" * 21, "invalid-broker-request"),
+            (RevisionSubclass("3365"), "invalid-broker-request"),
+            ("3366", "broker-evidence-mismatch"),
+        )
+
+        for index, (revision, code) in enumerate(cases):
+            with self.subTest(revision=repr(revision), code=code):
+                request = ingestion.IngestionRequest(
+                    "lark", "ingest-revision-%d" % index,
+                    self.ingest_state.generation_id,
+                    context, grant, attestation,
+                    brokers.LarkRequest(TOKEN, revision),
+                    digest("document-token"))
+                with self.assertRaises(ingestion.IngestionError) as caught:
+                    self.ingest(request, acquired)
+                self.assertEqual(caught.exception.code, code)
+                self.assertEqual(
+                    inspect_task(self.root).generation_id,
+                    self.ingest_state.generation_id)
+
     def test_private_request_runtime_decodes_then_uses_the_core_transaction(self):
         raw = b'{"ok":true,"identity":"user","data":{"content":"safe"}}'
         context, grant, attestation = self.authorization(TOKEN, revision="3365")

@@ -172,8 +172,10 @@ def _evidence(product: str, version, schema_digest, project_id=None) -> NativeEv
 
 
 def _snapshot(raw: bytes, context, evidence: NativeEvidence,
-              selector_digest=None) -> BrokerSnapshot:
+              selector_digest: Optional[str] = None) -> BrokerSnapshot:
     raw_digest = _digest(raw)
+    if selector_digest is not None:
+        _digest_value(selector_digest, "broker-response-invalid")
     # _authorize independently validates the attestation's owner against this
     # external context. The authenticated reader is not necessarily that owner.
     return BrokerSnapshot(raw, OwnerBinding("user", context.content_owner, "verified-principal"),
