@@ -301,7 +301,7 @@ git commit -m "feat: validate standalone Lark requests"
 - Create: `tests/fixtures/lark_runtime/1.0.86/drive-metadata.json`
 - Create: `tests/fixtures/lark_runtime/1.0.86/missing-scope.json`
 
-- [ ] **Step 1: Write failing profile and parser tests**
+- [x] **Step 1: Write failing profile and parser tests**
 
 Require a closed synthetic profile and immutable parsed evidence:
 
@@ -331,7 +331,7 @@ def test_observation_combines_exact_document_and_owner(self):
 
 Mutation tests must reject duplicate/unknown/missing fields, scalar subclasses, wrong success or identity literals, non-active auth/token literals, duplicate scopes, unknown broader scopes, revision zero/boolean/overflow, non-empty `failed_list`, multiple/no metadata rows, token/type mismatch, blank owner, malformed discarded title/timestamp/display fields, and free-form text that merely contains a scope name.
 
-- [ ] **Step 2: Run profile/parser tests red**
+- [x] **Step 2: Run profile/parser tests red**
 
 Run:
 
@@ -343,7 +343,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest \
 
 Expected: FAIL because the profile and transport parsers do not exist.
 
-- [ ] **Step 3: Implement the frozen profile and exact projections**
+- [x] **Step 3: Implement the frozen profile and exact projections**
 
 Define these immutable evidence records:
 
@@ -382,7 +382,7 @@ Represent each closed control schema as a canonical dictionary with explicit req
 
 `parse_verified_identity` accepts only the profile-pinned active and valid literals and produces the two retained fields. `has_required_scopes` requires one exact member from each alternative set. `parse_observation` independently parses both closed success envelopes and returns one `LarkObservation`. `parse_missing_scope` accepts only the closed typed error schema and returns a bounded tuple of missing scope names.
 
-- [ ] **Step 4: Run parser tests and fixture privacy checks green**
+- [x] **Step 4: Run parser tests and fixture privacy checks green**
 
 Run:
 
@@ -396,7 +396,7 @@ rg -n "bytedance|VBEBwkbg|larkoffice.com/wiki|PRIVATE|real content" \
 
 Expected: all tests PASS and `rg` returns no matches.
 
-- [ ] **Step 5: Commit the schemas and synthetic fixtures**
+- [x] **Step 5: Commit the schemas and synthetic fixtures**
 
 ```bash
 git add knowledge-distiller/scripts/knowledge_distiller/lark_profile.py \
