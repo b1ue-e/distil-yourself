@@ -14,7 +14,7 @@ from unittest import mock
 from tests.test_authorization import grant_data, reseal
 from tests.test_source_io import digest
 from knowledge_distiller import authorization as auth
-from knowledge_distiller import source_io
+from knowledge_distiller import lark_selector, source_io
 
 try:
     brokers = importlib.import_module("knowledge_distiller.brokers")
@@ -22,11 +22,16 @@ except ModuleNotFoundError:
     brokers = None
 
 
+TOKEN = "doxcn1234567890AbCdEfGhIjKl"
+OTHER_TOKEN = "doxcn1234567890AbCdEfGhIjKm"
+DOCUMENT_URL = "https://example.larkoffice.com/docx/" + TOKEN
+
+
 class BrokerTest(unittest.TestCase):
     def setUp(self):
         self.assertIsNotNone(brokers, "broker policy module is missing")
         self.context = auth.AuthorizationContext(
-            "task-1", "owner-1", "tenant-1", "https://example.larkoffice.com/docx/DocABC123",
+            "task-1", "owner-1", "tenant-1", DOCUMENT_URL,
             "distill", "42", None, 1500, True, ("owner-1", "authority-1"), "collaborator-1")
         self.request = brokers.LarkRequest(self.context.selector, "42")
         self.credentials = brokers.CredentialBinding(
@@ -55,10 +60,12 @@ class BrokerTest(unittest.TestCase):
 
     def fetch(self, request=None, context=None, records=None, **kwargs):
         grant, attestation = records or self.records()
+        required_auth_variables = kwargs.pop(
+            "required_auth_variables", ("LARK_TEST_USER_TOKEN",))
         return brokers.fetch_lark(
             request or self.request, grant=grant, attestation=attestation,
             context=context or self.context, runner=self.runner, credential_resolver=self.resolver,
-            required_auth_variables=("LARK_TEST_USER_TOKEN",), **kwargs)
+            required_auth_variables=required_auth_variables, **kwargs)
 
     def reject(self, action, code=None):
         with self.assertRaises(brokers.BrokerError) as caught:
@@ -69,7 +76,7 @@ class BrokerTest(unittest.TestCase):
         self.assertEqual(error.args, (error.code,))
         for diagnostic in (str(error), repr(error.args), repr(vars(error))):
             self.assertLess(len(diagnostic), 160)
-            for secret in ("PRIVATE", "SECRET-CREDENTIAL", "example.larkoffice.com", "DocABC123"):
+            for secret in ("PRIVATE", "SECRET-CREDENTIAL", "example.larkoffice.com", TOKEN):
                 self.assertNotIn(secret, diagnostic)
 
     def test_lark_exact_argv_minimal_env_limits_and_immutable_envelope(self):
@@ -78,7 +85,7 @@ class BrokerTest(unittest.TestCase):
         args, kwargs = self.runner.call_args
         self.assertEqual(args, ((
             "lark-cli", "api", "GET",
-            "/open-apis/docx/v1/documents/DocABC123/raw_content",
+            "/open-apis/docx/v1/documents/" + TOKEN + "/raw_content",
             "--as", "user"),))
         self.assertEqual(kwargs, {"env": {"LARK_TEST_USER_TOKEN": "SECRET-CREDENTIAL"},
                                   "shell": False, "timeout": 30, "max_bytes": brokers.MAX_GRAPH_BYTES,
@@ -102,14 +109,110 @@ class BrokerTest(unittest.TestCase):
             result.evidence.product_version = "changed"
 
     def test_normalized_token_allowed_without_url_rewriting(self):
-        context = replace(self.context, selector="DocABC123")
-        self.response = replace(self.response, selector_digest=digest(b"DocABC123"))
+        context = replace(self.context, selector=TOKEN)
+        self.response = replace(self.response, selector_digest=digest(TOKEN.encode()))
         self.runner.return_value = self.response
-        self.fetch(request=brokers.LarkRequest("DocABC123", "42"), context=context,
+        self.fetch(request=brokers.LarkRequest(TOKEN, "42"), context=context,
                    records=self.records(context))
         self.assertEqual(
             self.runner.call_args.args[0][3],
-            "/open-apis/docx/v1/documents/DocABC123/raw_content")
+            "/open-apis/docx/v1/documents/" + TOKEN + "/raw_content")
+
+    def test_lark_selector_commitment_and_ambient_user_are_bound(self):
+        committed = lark_selector.parse_document_selector(TOKEN)
+        context = replace(self.context, selector=committed.commitment)
+        request = brokers.LarkRequest(TOKEN, context.revision)
+        self.resolver.return_value = brokers.CredentialBinding(
+            "user", context.active_principal, context.tenant_account, ())
+        self.runner.return_value = replace(
+            self.response, selector_digest=committed.commitment)
+
+        result = self.fetch(
+            request=request, context=context, records=self.records(context),
+            required_auth_variables=())
+
+        self.assertEqual(result.selector_digest, committed.commitment)
+        self.resolver.assert_called_once_with(
+            active_principal=context.active_principal,
+            tenant_account=context.tenant_account,
+            required_variables=())
+        self.assertEqual(
+            self.runner.call_args.args[0][3],
+            "/open-apis/docx/v1/documents/" + TOKEN + "/raw_content")
+
+    def test_lark_committed_selector_rejects_substitution_and_ambient_state(self):
+        committed = lark_selector.parse_document_selector(TOKEN)
+        context = replace(self.context, selector=committed.commitment)
+        request = brokers.LarkRequest(TOKEN, context.revision)
+        records = self.records(context)
+
+        def reset():
+            self.resolver.reset_mock()
+            self.runner.reset_mock()
+            self.resolver.return_value = brokers.CredentialBinding(
+                "user", context.active_principal, context.tenant_account, ())
+            self.runner.return_value = replace(
+                self.response, selector_digest=committed.commitment)
+
+        reset()
+        self.reject(
+            lambda: self.fetch(
+                request=brokers.LarkRequest(OTHER_TOKEN, context.revision),
+                context=context, records=records, required_auth_variables=()),
+            "authorization-context-mismatch")
+        self.resolver.assert_not_called()
+        self.runner.assert_not_called()
+
+        changed_context = replace(context, selector="sha256:" + "0" * 64)
+        reset()
+        self.reject(
+            lambda: self.fetch(
+                request=request, context=changed_context,
+                records=self.records(changed_context), required_auth_variables=()),
+            "authorization-context-mismatch")
+        self.resolver.assert_not_called()
+        self.runner.assert_not_called()
+
+        for changes in (
+            {"selector_digest": "sha256:" + "0" * 64},
+            {"content_owner": "other"},
+            {"revision_before": "41"},
+            {"revision_after": "43"},
+            {"active_principal": "other"},
+            {"redirected": True},
+            {"redirected": 0},
+            {"fallback_principal": True},
+            {"fallback_principal": 0},
+        ):
+            with self.subTest(receipt=changes):
+                reset()
+                self.runner.return_value = replace(
+                    self.runner.return_value, **changes)
+                self.reject(
+                    lambda: self.fetch(
+                        request=request, context=context, records=records,
+                        required_auth_variables=()))
+
+        for binding in (
+            brokers.CredentialBinding(
+                "user", context.active_principal, context.tenant_account,
+                (("LARK_TEST_USER_TOKEN", "SECRET-CREDENTIAL"),)),
+            brokers.CredentialBinding(
+                "bot", context.active_principal, context.tenant_account, ()),
+            brokers.CredentialBinding(
+                "user", "other", context.tenant_account, ()),
+            brokers.CredentialBinding(
+                "user", context.active_principal, "other", ()),
+        ):
+            with self.subTest(binding=binding):
+                reset()
+                self.resolver.return_value = binding
+                self.reject(
+                    lambda: self.fetch(
+                        request=request, context=context, records=records,
+                        required_auth_variables=()),
+                    "invalid-credentials")
+                self.runner.assert_not_called()
 
     def test_snapshot_owner_is_independently_attested_content_owner_for_both_sources(self):
         lark = self.fetch()
@@ -155,10 +258,12 @@ class BrokerTest(unittest.TestCase):
     def test_scope_substitution_and_unsafe_selectors_rejected_before_runner(self):
         for field in ("selector", "revision", "tenant_account", "purpose", "active_principal"):
             self.reject(lambda: self.fetch(context=replace(self.context, **{field: "other"})))
-        for selector in ("--all", "doc one", "https://evil.example/docx/DocABC123",
-                         "https://example.larkoffice.com/wiki/DocABC123", "https://example.larkoffice.com/docx/DocABC123?x=1",
-                         "https://user@example.larkoffice.com/docx/DocABC123", "https://example.larkoffice.com:443/docx/DocABC123",
-                         "https://EXAMPLE.larkoffice.com/docx/DocABC123", "DocABC123/other", "DocABC123\u202e"):
+        for selector in ("--all", "doc one", "https://evil.example/docx/" + TOKEN,
+                         "https://example.larkoffice.com/wiki/" + TOKEN, DOCUMENT_URL + "?x=1",
+                         "https://user@example.larkoffice.com/docx/" + TOKEN,
+                         "https://example.larkoffice.com:443/docx/" + TOKEN,
+                         "https://EXAMPLE.larkoffice.com/docx/" + TOKEN,
+                         TOKEN + "/other", TOKEN + "\u202e"):
             self.reject(lambda: self.fetch(request=brokers.LarkRequest(selector, "42")))
         for revision in ("latest", "LATEST", "-1", "--all", "", "042", True, 42, "42\ud800"):
             self.reject(lambda: self.fetch(request=brokers.LarkRequest(self.context.selector, revision)))
@@ -177,6 +282,23 @@ class BrokerTest(unittest.TestCase):
             self.resolver.return_value = replace(self.credentials, **changes)
             self.reject(self.fetch, "invalid-credentials")
         self.runner.assert_not_called()
+
+        variables = tuple("LARK_TEST_%d_TOKEN" % index for index in range(8))
+        self.resolver.return_value = brokers.CredentialBinding(
+            "user", self.context.active_principal, self.context.tenant_account,
+            tuple((name, "synthetic-%d" % index)
+                  for index, name in enumerate(variables)))
+        self.fetch(required_auth_variables=variables)
+        self.assertEqual(self.runner.call_args.kwargs["env"], dict(
+            self.resolver.return_value.environment))
+
+        for variables in ([], tuple("LARK_TEST_%d_TOKEN" % index
+                                     for index in range(9))):
+            with self.subTest(required_variables=variables):
+                self.reject(
+                    lambda variables=variables: self.fetch(
+                        required_auth_variables=variables),
+                    "invalid-credentials")
 
     def test_lark_result_evidence_cannot_substitute_scope_or_principal(self):
         for changes in ({"principal_kind": "bot"}, {"active_principal": "other"},

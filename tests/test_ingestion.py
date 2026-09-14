@@ -15,7 +15,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "knowledge-distiller" / "scripts"))
 
 from knowledge_distiller import (
-    authorization, brokers, compiler, ingestion, native_adapters, sources,
+    authorization, brokers, compiler, ingestion, lark_selector,
+    native_adapters, sources,
 )
 from knowledge_distiller.journal import Journal, canonical_json
 from knowledge_distiller.persistence import TaskCoordinator, create_task, inspect_task, recover_task
@@ -26,6 +27,11 @@ from tests.test_knowledge import packet
 def digest(value):
     raw = value if type(value) is bytes else value.encode("utf-8")
     return "sha256:" + hashlib.sha256(raw).hexdigest()
+
+
+TOKEN = "doxcn1234567890AbCdEfGhIjKl"
+OTHER_TOKEN = "doxcn1234567890AbCdEfGhIjKm"
+DOCUMENT_URL = "https://tenant.larkoffice.com/docx/" + TOKEN
 
 
 class IngestionTest(unittest.TestCase):
@@ -78,7 +84,7 @@ class IngestionTest(unittest.TestCase):
         return context, grant, attestation
 
     def snapshot(self, raw, product, version, schema, project=None):
-        selector = "doc-token" if product == "lark" else "session.jsonl"
+        selector = TOKEN if product == "lark" else "session.jsonl"
         return brokers.BrokerSnapshot(
             raw=raw, owner=sources.OwnerBinding("user", self.owner, "verified-principal"),
             selector_digest=digest(selector), raw_digest=digest(raw),
@@ -102,13 +108,13 @@ class IngestionTest(unittest.TestCase):
 
     def test_lark_snapshot_is_redacted_and_atomically_persisted(self):
         raw = b'{"ok":true,"identity":"user","data":{"content":"password=synthetic-secret"}}'
-        context, grant, attestation = self.authorization("doc-token", revision="3365")
+        context, grant, attestation = self.authorization(TOKEN, revision="3365")
         request = ingestion.IngestionRequest(
             source_kind="lark", transaction_id="ingest-lark",
             expected_generation_id=self.ingest_state.generation_id,
             authorization_context=context, content_grant=grant,
             authority_attestation=attestation,
-            native_request=brokers.LarkRequest("doc-token", "3365"),
+            native_request=brokers.LarkRequest(TOKEN, "3365"),
             native_locator_id=digest("document-token"))
         acquired = self.snapshot(
             raw, "lark", "1.0.86", native_adapters.LARK_NATIVE_SCHEMA_DIGEST)
@@ -132,13 +138,57 @@ class IngestionTest(unittest.TestCase):
         self.assertEqual(evidence["source_snapshot_id"], digest(raw))
         self.assertNotIn(b"synthetic-secret", (self.root / "event-log.frames").read_bytes())
 
+    def test_lark_committed_selector_hides_token(self):
+        raw = b'{"ok":true,"identity":"user","data":{"content":"safe"}}'
+        committed = lark_selector.parse_document_selector(DOCUMENT_URL)
+        context, grant, attestation = self.authorization(
+            committed.commitment, revision="3365")
+        request = ingestion.IngestionRequest(
+            "lark", "ingest-lark-committed", self.ingest_state.generation_id,
+            context, grant, attestation,
+            brokers.LarkRequest(DOCUMENT_URL, "3365"), digest("document-token"))
+        acquired = replace(
+            self.snapshot(
+                raw, "lark", "1.0.86",
+                native_adapters.LARK_NATIVE_SCHEMA_DIGEST),
+            selector_digest=committed.commitment)
+
+        rejected = (
+            replace(
+                request, transaction_id="ingest-lark-other-token",
+                native_request=brokers.LarkRequest(OTHER_TOKEN, "3365")),
+            request,
+        )
+        rejected_snapshots = (
+            acquired,
+            replace(acquired, selector_digest=digest(committed.commitment)),
+        )
+        for changed_request, changed_snapshot in zip(
+                rejected, rejected_snapshots):
+            with self.subTest(transaction_id=changed_request.transaction_id):
+                with self.assertRaises(ingestion.IngestionError) as caught:
+                    self.ingest(changed_request, changed_snapshot)
+                self.assertEqual(caught.exception.code, "broker-evidence-mismatch")
+                self.assertEqual(
+                    inspect_task(self.root).generation_id,
+                    self.ingest_state.generation_id)
+
+        result, calls = self.ingest(request, acquired)
+
+        self.assertEqual(calls, ["lark"])
+        generation = self.root / "generations" / result.generation_id
+        generation_bytes = b"".join(
+            path.read_bytes() for path in generation.rglob("*") if path.is_file())
+        self.assertNotIn(TOKEN.encode("ascii"), generation_bytes)
+        self.assertNotIn(DOCUMENT_URL.encode("ascii"), generation_bytes)
+
     def test_private_request_runtime_decodes_then_uses_the_core_transaction(self):
         raw = b'{"ok":true,"identity":"user","data":{"content":"safe"}}'
-        context, grant, attestation = self.authorization("doc-token", revision="3365")
+        context, grant, attestation = self.authorization(TOKEN, revision="3365")
         request = ingestion.IngestionRequest(
             "lark", "ingest-runtime", self.ingest_state.generation_id,
             context, grant, attestation,
-            brokers.LarkRequest("doc-token", "3365"), digest("document-token"))
+            brokers.LarkRequest(TOKEN, "3365"), digest("document-token"))
         acquired = self.snapshot(
             raw, "lark", "1.0.86", native_adapters.LARK_NATIVE_SCHEMA_DIGEST)
         calls = []
@@ -157,11 +207,11 @@ class IngestionTest(unittest.TestCase):
 
     def test_writer_lease_prevents_a_second_source_read(self):
         raw = b'{"ok":true,"identity":"user","data":{"content":"safe"}}'
-        context, grant, attestation = self.authorization("doc-token", revision="3365")
+        context, grant, attestation = self.authorization(TOKEN, revision="3365")
         request = ingestion.IngestionRequest(
             "lark", "ingest-lease", self.ingest_state.generation_id,
             context, grant, attestation,
-            brokers.LarkRequest("doc-token", "3365"), digest("document-token"))
+            brokers.LarkRequest(TOKEN, "3365"), digest("document-token"))
         acquired = self.snapshot(
             raw, "lark", "1.0.86", native_adapters.LARK_NATIVE_SCHEMA_DIGEST)
         calls = []
@@ -192,11 +242,11 @@ class IngestionTest(unittest.TestCase):
         self.assertEqual(calls, ["outer-read"])
 
     def test_invalid_redaction_key_fails_before_source_read(self):
-        context, grant, attestation = self.authorization("doc-token", revision="3365")
+        context, grant, attestation = self.authorization(TOKEN, revision="3365")
         request = ingestion.IngestionRequest(
             "lark", "ingest-invalid-key", self.ingest_state.generation_id,
             context, grant, attestation,
-            brokers.LarkRequest("doc-token", "3365"), digest("document-token"))
+            brokers.LarkRequest(TOKEN, "3365"), digest("document-token"))
         calls = []
 
         with self.assertRaises(ingestion.IngestionError) as caught:
@@ -212,11 +262,11 @@ class IngestionTest(unittest.TestCase):
 
     def test_acquisition_cannot_mutate_pinned_authorization_or_request(self):
         raw = b'{"ok":true,"identity":"user","data":{"content":"safe"}}'
-        context, grant, attestation = self.authorization("doc-token", revision="3365")
+        context, grant, attestation = self.authorization(TOKEN, revision="3365")
         request = ingestion.IngestionRequest(
             "lark", "ingest-mutation", self.ingest_state.generation_id,
             context, grant, attestation,
-            brokers.LarkRequest("doc-token", "3365"), digest("document-token"))
+            brokers.LarkRequest(TOKEN, "3365"), digest("document-token"))
         acquired = self.snapshot(
             raw, "lark", "1.0.86", native_adapters.LARK_NATIVE_SCHEMA_DIGEST)
         object.__setattr__(acquired, "selector_digest", digest("other-token"))
@@ -237,8 +287,8 @@ class IngestionTest(unittest.TestCase):
                 redaction_key=self.key)
 
         self.assertEqual(caught.exception.code, "broker-evidence-mismatch")
-        self.assertEqual(context.selector, "doc-token")
-        self.assertEqual(request.native_request.selector, "doc-token")
+        self.assertEqual(context.selector, TOKEN)
+        self.assertEqual(request.native_request.selector, TOKEN)
         self.assertEqual(inspect_task(self.root).generation_id,
                          self.ingest_state.generation_id)
 
@@ -533,12 +583,12 @@ class IngestionTest(unittest.TestCase):
             b'{"ok":true,"identity":"user","data":'
             b'{"content":"Synthetic situational context."}}')
         lark_context, lark_grant, lark_attestation = self.authorization(
-            "doc-token", revision="3365",
+            TOKEN, revision="3365",
             derived_processing_until=processing_until)
         lark_request = ingestion.IngestionRequest(
             "lark", "ingest-dual-lark", self.ingest_state.generation_id,
             lark_context, lark_grant, lark_attestation,
-            brokers.LarkRequest("doc-token", "3365"), digest("document-token"))
+            brokers.LarkRequest(TOKEN, "3365"), digest("document-token"))
         lark_snapshot = self.snapshot(
             lark_raw, "lark", "1.0.86", native_adapters.LARK_NATIVE_SCHEMA_DIGEST)
 
@@ -670,11 +720,11 @@ class IngestionTest(unittest.TestCase):
             review = coordinator.transition(
                 Event.START_DISTILL,
                 TransitionFacts(selected_capability=True, authorized_snapshots=True))
-        context, grant, attestation = self.authorization("doc-token", revision="3365")
+        context, grant, attestation = self.authorization(TOKEN, revision="3365")
         request = ingestion.IngestionRequest(
             "lark", "ingest-wrong-phase", review.generation_id,
             context, grant, attestation,
-            brokers.LarkRequest("doc-token", "3365"), digest("document-token"))
+            brokers.LarkRequest(TOKEN, "3365"), digest("document-token"))
         calls = []
 
         with self.assertRaises(ingestion.IngestionError) as caught:
@@ -724,11 +774,11 @@ class IngestionTest(unittest.TestCase):
         for revoked, failure in ((True, None), (False, RuntimeError("adapter-failed"))):
             with self.subTest(revoked=revoked):
                 context, grant, attestation = self.authorization(
-                    "doc-token", revision="3365", revoked=revoked)
+                    TOKEN, revision="3365", revoked=revoked)
                 request = ingestion.IngestionRequest(
                     "lark", "ingest-failure", self.ingest_state.generation_id,
                     context, grant, attestation,
-                    brokers.LarkRequest("doc-token", "3365"), digest("document-token"))
+                    brokers.LarkRequest(TOKEN, "3365"), digest("document-token"))
                 calls = []
 
                 def acquire(*args):
@@ -749,7 +799,7 @@ class IngestionTest(unittest.TestCase):
                 self.assertFalse(staging.exists() and any(staging.rglob("f-*")))
 
     def test_stale_generation_and_unknown_kind_fail_before_acquisition(self):
-        context, grant, attestation = self.authorization("doc-token", revision="3365")
+        context, grant, attestation = self.authorization(TOKEN, revision="3365")
         class SourceKindSubclass(str):
             def __radd__(self, other):
                 return "evidence/substituted.json"
@@ -762,7 +812,7 @@ class IngestionTest(unittest.TestCase):
         for kind, generation, code in rejection_cases:
             request = ingestion.IngestionRequest(
                 kind, "ingest-preflight", generation, context, grant, attestation,
-                brokers.LarkRequest("doc-token", "3365"), digest("document-token"))
+                brokers.LarkRequest(TOKEN, "3365"), digest("document-token"))
             calls = []
             with self.assertRaises(ingestion.IngestionError) as caught:
                 ingestion.ingest_source(
@@ -781,11 +831,11 @@ class IngestionTest(unittest.TestCase):
 
     def test_expiry_principal_schema_and_source_drift_never_commit(self):
         raw = b'{"ok":true,"identity":"user","data":{"content":"safe"}}'
-        context, grant, attestation = self.authorization("doc-token", revision="3365")
+        context, grant, attestation = self.authorization(TOKEN, revision="3365")
         base = ingestion.IngestionRequest(
             "lark", "ingest-drift", self.ingest_state.generation_id,
             context, grant, attestation,
-            brokers.LarkRequest("doc-token", "3365"), digest("document-token"))
+            brokers.LarkRequest(TOKEN, "3365"), digest("document-token"))
         expired_context = authorization.AuthorizationContext(
             **{**asdict(context), "session_range": context.session_range, "now": 100})
         principal_context = authorization.AuthorizationContext(
@@ -821,11 +871,11 @@ class IngestionTest(unittest.TestCase):
 
     def test_snapshot_scope_and_nested_evidence_are_closed_before_normalization(self):
         raw = b'{"ok":true,"identity":"user","data":{"content":"safe"}}'
-        context, grant, attestation = self.authorization("doc-token", revision="3365")
+        context, grant, attestation = self.authorization(TOKEN, revision="3365")
         request = ingestion.IngestionRequest(
             "lark", "ingest-scope", self.ingest_state.generation_id,
             context, grant, attestation,
-            brokers.LarkRequest("doc-token", "3365"), digest("document-token"))
+            brokers.LarkRequest(TOKEN, "3365"), digest("document-token"))
         for mutation, code in (
                 ("selector", "broker-evidence-mismatch"),
                 ("nested", "broker-response-invalid"),
@@ -849,11 +899,11 @@ class IngestionTest(unittest.TestCase):
                                  self.ingest_state.generation_id)
 
     def test_partial_native_input_and_crash_recovery_preserve_prior_generation(self):
-        context, grant, attestation = self.authorization("doc-token", revision="3365")
+        context, grant, attestation = self.authorization(TOKEN, revision="3365")
         request = ingestion.IngestionRequest(
             "lark", "ingest-crash", self.ingest_state.generation_id,
             context, grant, attestation,
-            brokers.LarkRequest("doc-token", "3365"), digest("document-token"))
+            brokers.LarkRequest(TOKEN, "3365"), digest("document-token"))
         partial = self.snapshot(
             b'{"ok":true', "lark", "1.0.86", native_adapters.LARK_NATIVE_SCHEMA_DIGEST)
         with self.assertRaises(ingestion.IngestionError):

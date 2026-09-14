@@ -258,17 +258,25 @@ def _validated_snapshot(snapshot, request, selector_key):
     if (snapshot.raw_digest != _digest(snapshot.raw)
             or snapshot.source_snapshot_id != snapshot.raw_digest):
         _fail("snapshot-binding-mismatch")
-    if (snapshot.selector_digest != _digest(context.selector)
-            or owner.kind != "user" or owner.id != context.content_owner
+    if (owner.kind != "user" or owner.id != context.content_owner
             or owner.verification != "verified-principal"):
         _fail("broker-evidence-mismatch")
     if request.source_kind == "lark":
         native_request = request.native_request
-        if (native_request.selector != context.selector
+        try:
+            _, selector_matches, expected_selector_digest = (
+                brokers._lark_selector_binding(
+                    native_request.selector, context.selector))
+        except brokers.BrokerError:
+            _fail("invalid-broker-request")
+        if (not selector_matches
+                or snapshot.selector_digest != expected_selector_digest
                 or native_request.revision != context.revision
                 or context.session_range is not None):
             _fail("broker-evidence-mismatch")
     else:
+        if snapshot.selector_digest != _digest(context.selector):
+            _fail("broker-evidence-mismatch")
         native_request = request.native_request
         source_range = context.session_range
         if (type(native_request.path) is not str

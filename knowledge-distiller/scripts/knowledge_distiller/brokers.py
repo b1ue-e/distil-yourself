@@ -24,7 +24,7 @@ import re
 import subprocess
 from typing import Callable, Optional, Tuple
 
-from . import adapters, authorization, source_io
+from . import adapters, authorization, lark_selector, source_io
 from .adapters import MAX_GRAPH_BYTES
 from .sources import OwnerBinding
 
@@ -171,38 +171,51 @@ def _evidence(product: str, version, schema_digest, project_id=None) -> NativeEv
     return NativeEvidence(product, version, schema_digest, project_id)
 
 
-def _snapshot(raw: bytes, context, evidence: NativeEvidence) -> BrokerSnapshot:
+def _snapshot(raw: bytes, context, evidence: NativeEvidence,
+              selector_digest=None) -> BrokerSnapshot:
     raw_digest = _digest(raw)
     # _authorize independently validates the attestation's owner against this
     # external context. The authenticated reader is not necessarily that owner.
     return BrokerSnapshot(raw, OwnerBinding("user", context.content_owner, "verified-principal"),
-                          _digest(context.selector.encode("utf-8")), raw_digest, raw_digest,
+                          (selector_digest if selector_digest is not None
+                           else _digest(context.selector.encode("utf-8"))),
+                          raw_digest, raw_digest,
                           len(raw), evidence)
 
 
-def _lark_request(request, context) -> str:
-    _closed(request, LarkRequest, "invalid-broker-request")
-    # Only normalized docx URLs or one opaque alphanumeric document token.
-    # No wiki indirection, query, fragment, alternate port, userinfo, or aliases.
-    selector = request.selector
-    token = r"[A-Za-z0-9]+"
-    url = r"https://[a-z0-9]+(?:-[a-z0-9]+)*\.(?:larkoffice\.com|larksuite\.com|feishu\.cn)/docx/" + token
-    if (type(selector) is not str or len(selector) > 4096
-            or re.fullmatch(r"(?:" + token + "|" + url + ")", selector) is None):
+def _lark_selector_binding(selector, authorized_selector):
+    try:
+        parsed = lark_selector.parse_document_selector(selector)
+    except lark_selector.SelectorError:
         raise BrokerError("invalid-selector")
+    committed = (type(authorized_selector) is str and re.fullmatch(
+        r"sha256:[0-9a-f]{64}", authorized_selector) is not None)
+    if committed:
+        matches = hmac.compare_digest(parsed.commitment, authorized_selector)
+        selector_digest = authorized_selector
+    else:
+        matches = selector == authorized_selector
+        selector_digest = _digest(authorized_selector.encode("utf-8"))
+    return parsed.token, matches, selector_digest
+
+
+def _lark_request(request, context):
+    _closed(request, LarkRequest, "invalid-broker-request")
+    document_token, selector_matches, selector_digest = _lark_selector_binding(
+        request.selector, context.selector)
     # CLI help documents -1 as latest. Nonnegative canonical decimal revisions
     # cannot become options, aliases, or a request for an implicit current view.
     if (type(request.revision) is not str or len(request.revision) > 20
             or re.fullmatch(r"(?:0|[1-9][0-9]*)", request.revision) is None):
         raise BrokerError("invalid-revision")
-    if (context.session_range is not None or selector != context.selector
+    if (context.session_range is not None or not selector_matches
             or request.revision != context.revision):
         raise BrokerError("authorization-context-mismatch")
-    return selector.rsplit("/", 1)[-1]
+    return document_token, selector_digest
 
 
 def _credentials(resolver, required_variables, context) -> dict:
-    if type(required_variables) is not tuple or not 1 <= len(required_variables) <= 8:
+    if type(required_variables) is not tuple or not 0 <= len(required_variables) <= 8:
         raise BrokerError("invalid-credentials")
     for name in required_variables:
         if (type(name) is not str or len(name) > 128
@@ -252,7 +265,7 @@ def fetch_lark(request: LarkRequest, *, grant: authorization.ContentGrant,
     verified identity, redirect, or revision evidence and is always rejected.
     """
     _authorize(grant, attestation, context)
-    document_token = _lark_request(request, context)
+    document_token, selector_digest = _lark_request(request, context)
     env = _credentials(credential_resolver, required_auth_variables, context)
     argv = (
         "lark-cli", "api", "GET",
@@ -286,13 +299,13 @@ def fetch_lark(request: LarkRequest, *, grant: authorization.ContentGrant,
             or response.principal_kind != "user"
             or response.active_principal != context.active_principal
             or response.tenant_account != context.tenant_account
-            or response.selector_digest != _digest(context.selector.encode("utf-8"))
+            or response.selector_digest != selector_digest
             or response.purpose != context.purpose
             or response.revision_before != context.revision or response.revision_after != context.revision
             or response.content_owner != context.content_owner):
         raise BrokerError("broker-evidence-mismatch")
     evidence = _evidence("lark", response.product_version, response.native_schema_digest)
-    return _snapshot(response.raw, context, evidence)
+    return _snapshot(response.raw, context, evidence, selector_digest)
 
 
 def read_local_session(request: SessionRequest, *, grant: authorization.ContentGrant,
