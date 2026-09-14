@@ -32,7 +32,6 @@ _ERROR_CODES = frozenset(
         "lark-cli-timeout",
         "lark-cli-output-limit",
         "lark-cli-failed",
-        "lark-cli-cancelled",
     }
 )
 _CHILD_ENVIRONMENT_NAMES = ("HOME", "PATH", "LANG", "LC_ALL", "TMPDIR")
@@ -274,8 +273,10 @@ def _child_environment():
             continue
         if type(value) is not str or not value or "\0" in value:
             raise LarkTransportError("lark-cli-unsafe")
-        if name in {"HOME", "TMPDIR"} and not Path(value).is_absolute():
-            raise LarkTransportError("lark-cli-unsafe")
+        if name in {"HOME", "TMPDIR"}:
+            path = Path(value)
+            if not path.is_absolute() or not path.is_dir():
+                raise LarkTransportError("lark-cli-unsafe")
         if name == "PATH" and any(
             not entry or not Path(entry).is_absolute()
             for entry in value.split(os.pathsep)
@@ -323,6 +324,38 @@ def _terminate_process_group(process):
         process.wait()
 
 
+def _cleanup_process(process, selector, streams, terminate):
+    """Close and reap every child resource, retaining only the first failure."""
+
+    first_error = None
+
+    def attempt(action):
+        nonlocal first_error
+        try:
+            action()
+        except BaseException as error:
+            if first_error is None:
+                first_error = error
+
+    if process is not None and terminate:
+        attempt(lambda: _terminate_process_group(process))
+    if selector is not None:
+        attempt(selector.close)
+    if process is None:
+        return first_error
+    if process.stdin is not None and not process.stdin.closed:
+        attempt(process.stdin.close)
+    for stream in streams:
+        if stream is not None and not stream.closed:
+            attempt(stream.close)
+    if process.poll() is None:
+        attempt(lambda: _terminate_process_group(process))
+    if process.poll() is None:
+        attempt(process.kill)
+    attempt(lambda: process.wait(timeout=_TERMINATION_GRACE_SECONDS))
+    return first_error
+
+
 class LarkCliTransport:
     """Fixed-command, bounded subprocess transport for synthetic Lark tests."""
 
@@ -343,6 +376,8 @@ class LarkCliTransport:
         process = None
         selector = None
         streams = ()
+        output_bytes = None
+        primary_error = None
         try:
             process = subprocess.Popen(
                 (self._fingerprint.canonical_path,) + arguments,
@@ -407,25 +442,26 @@ class LarkCliTransport:
                 raise LarkTransportError("lark-cli-failed")
             if _group_exists(process.pid):
                 raise LarkTransportError("lark-cli-failed")
-            return bytes(output)
-        except BaseException:
-            if process is not None:
-                _terminate_process_group(process)
-            raise
-        finally:
-            if selector is not None:
-                selector.close()
-            if process is not None:
-                if process.stdin is not None and not process.stdin.closed:
-                    process.stdin.close()
-                for stream in streams:
-                    if stream is not None and not stream.closed:
-                        stream.close()
-                if process.poll() is None:
-                    _terminate_process_group(process)
-                else:
-                    process.wait()
+            output_bytes = bytes(output)
+        except BaseException as error:
+            primary_error = error
+
+        cleanup_error = _cleanup_process(
+            process, selector, streams, terminate=primary_error is not None
+        )
+        fingerprint_error = None
+        if process is not None:
+            try:
                 self._check_fingerprint()
+            except BaseException as error:
+                fingerprint_error = error
+        if primary_error is not None:
+            raise primary_error.with_traceback(primary_error.__traceback__)
+        if cleanup_error is not None:
+            raise cleanup_error.with_traceback(cleanup_error.__traceback__)
+        if fingerprint_error is not None:
+            raise fingerprint_error.with_traceback(fingerprint_error.__traceback__)
+        return output_bytes
 
     def _run(self, arguments, *, stdin=b"", stdout_limit):
         self._check_fingerprint()
