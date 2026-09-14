@@ -140,15 +140,18 @@ class LarkProfileTest(unittest.TestCase):
         self.assertEqual(profile.canonical_digest, lark_profile.canonical_digest(record))
 
     def test_internal_profile_record_mutation_fails_closed_and_is_restored(self):
-        original = copy.deepcopy(lark_profile._PROFILE_RECORD)
-        try:
-            lark_profile._PROFILE_RECORD["status"] = "live-enabled"
+        original = lark_profile._PROFILE_RECORD
+        mutated = copy.deepcopy(original)
+        mutated["status"] = "live-enabled"
+        with mock.patch.object(lark_profile, "_PROFILE_RECORD", mutated):
             with self.assertRaises(RuntimeError) as caught:
                 lark_profile.load_pinned_profile()
             self.assertEqual(caught.exception.args, ("invalid-lark-profile",))
-        finally:
-            lark_profile._PROFILE_RECORD.clear()
-            lark_profile._PROFILE_RECORD.update(original)
+        self.assertIs(lark_profile._PROFILE_RECORD, original)
+        self.assertIs(
+            lark_profile._PROFILE_RECORD["control_schema_digests"],
+            lark_profile._CONTROL_SCHEMA_DIGESTS,
+        )
         self.assertEqual(lark_profile.load_pinned_profile().status, "synthetic-only")
 
     def test_public_profile_and_schema_copies_are_isolated(self):
@@ -379,15 +382,18 @@ class LarkControlParserTest(unittest.TestCase):
             self.reject(lambda: transport.parse_observation(b"{}", b"{}", TOKEN))
 
     def test_internal_control_schema_mutation_fails_closed_and_is_restored(self):
-        original = copy.deepcopy(lark_profile._CONTROL_SCHEMAS)
-        try:
-            schema = lark_profile._CONTROL_SCHEMAS["auth-status"]["schema"]
-            user = schema["properties"]["identities"]["properties"]["user"]
-            user["properties"]["display_name"]["max_length"] = 512
+        original = lark_profile._CONTROL_SCHEMAS
+        mutated = copy.deepcopy(original)
+        schema = mutated["auth-status"]["schema"]
+        user = schema["properties"]["identities"]["properties"]["user"]
+        user["properties"]["display_name"]["max_length"] = 512
+        with mock.patch.object(lark_profile, "_CONTROL_SCHEMAS", mutated):
             self.reject(lambda: transport.parse_verified_identity(AUTH_FIXTURE))
-        finally:
-            lark_profile._CONTROL_SCHEMAS.clear()
-            lark_profile._CONTROL_SCHEMAS.update(original)
+        self.assertIs(lark_profile._CONTROL_SCHEMAS, original)
+        self.assertIs(
+            lark_profile._CONTROL_SCHEMAS["auth-status"],
+            lark_profile._AUTH_STATUS_SCHEMA,
+        )
         self.assertEqual(transport.parse_verified_identity(AUTH_FIXTURE).open_id, OWNER)
 
     def test_typed_missing_scope_is_accepted_without_free_text_matching(self):
