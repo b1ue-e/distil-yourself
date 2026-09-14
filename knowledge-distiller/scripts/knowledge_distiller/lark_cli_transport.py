@@ -1,22 +1,56 @@
-"""Pure validation of pinned synthetic Lark control responses.
+"""Pinned Lark response validation and a fixed, bounded CLI transport.
 
-This module intentionally contains no process discovery, subprocess execution,
-authentication, or network access. The checked-in contracts are synthetic until
-a separately approved compatibility probe can establish real CLI shapes.
+The transport remains a synthetic-test primitive until a separate runtime gate
+and approved compatibility probe establish real CLI shapes and live readiness.
 """
 
 from dataclasses import dataclass
+import os
+from pathlib import Path
+import re
+import selectors
+import shutil
+import signal
+import stat
+import subprocess
+import time
 from typing import Tuple
 
 from . import adapters, lark_profile
-from .lark_selector import TOKEN
+from .journal import canonical_json
+from .lark_selector import ParsedDocumentSelector, TOKEN, selector_commitment
+
+
+_ERROR_CODES = frozenset(
+    {
+        "invalid-lark-control-response",
+        "invalid-selector",
+        "lark-cli-not-found",
+        "lark-cli-unsafe",
+        "lark-cli-incompatible",
+        "lark-cli-fingerprint-changed",
+        "lark-cli-timeout",
+        "lark-cli-output-limit",
+        "lark-cli-failed",
+        "lark-cli-cancelled",
+    }
+)
+_CHILD_ENVIRONMENT_NAMES = ("HOME", "PATH", "LANG", "LC_ALL", "TMPDIR")
+_FIXED_CHILD_ENVIRONMENT = {
+    "LARKSUITE_CLI_NO_UPDATE_NOTIFIER": "1",
+    "LARKSUITE_CLI_NO_SKILLS_NOTIFIER": "1",
+}
+_READ_CHUNK_BYTES = 64 * 1024
+_TERMINATION_GRACE_SECONDS = 1.0
 
 
 class LarkTransportError(ValueError):
     """A code-only failure that never carries response data."""
 
-    def __init__(self):
-        self.code = "invalid-lark-control-response"
+    def __init__(self, code="invalid-lark-control-response"):
+        if type(code) is not str or code not in _ERROR_CODES:
+            code = "lark-cli-failed"
+        self.code = code
         super().__init__(self.code)
 
 
@@ -160,3 +194,314 @@ def parse_missing_scope(raw):
 
     value = _decode(raw, "missing-scope")
     return tuple(value["error"]["missing_scopes"])
+
+
+@dataclass(frozen=True, repr=False)
+class _ExecutableFingerprint:
+    canonical_path: str
+    device: int
+    inode: int
+    uid: int
+    mode: int
+    size: int
+    mtime_ns: int
+
+
+def _native_fingerprint(path):
+    try:
+        metadata = os.stat(path, follow_symlinks=False)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(metadata.st_mode) & 0o022
+            or not stat.S_IMODE(metadata.st_mode) & 0o100
+        ):
+            raise LarkTransportError("lark-cli-unsafe")
+        return _ExecutableFingerprint(
+            str(path),
+            metadata.st_dev,
+            metadata.st_ino,
+            metadata.st_uid,
+            stat.S_IMODE(metadata.st_mode),
+            metadata.st_size,
+            metadata.st_mtime_ns,
+        )
+    except LarkTransportError:
+        raise
+    except FileNotFoundError:
+        raise LarkTransportError("lark-cli-not-found") from None
+    except Exception:
+        raise LarkTransportError("lark-cli-unsafe") from None
+
+
+def _resolve_native_executable():
+    try:
+        entry_text = shutil.which("lark-cli")
+    except Exception:
+        raise LarkTransportError("lark-cli-not-found") from None
+    if entry_text is None:
+        raise LarkTransportError("lark-cli-not-found")
+    if type(entry_text) is not str or not Path(entry_text).is_absolute():
+        raise LarkTransportError("lark-cli-unsafe")
+    path_entry = Path(entry_text)
+    linked_entry = path_entry.is_symlink()
+    try:
+        entry = path_entry.resolve(strict=True)
+    except FileNotFoundError:
+        raise LarkTransportError("lark-cli-not-found") from None
+    except Exception:
+        raise LarkTransportError("lark-cli-unsafe") from None
+
+    if entry.name == "run.js" and entry.parent.name == "scripts":
+        try:
+            native = (entry.parent.parent / "bin" / "lark-cli").resolve(strict=True)
+        except FileNotFoundError:
+            raise LarkTransportError("lark-cli-not-found") from None
+        except Exception:
+            raise LarkTransportError("lark-cli-unsafe") from None
+    elif linked_entry or entry.suffix == ".js":
+        raise LarkTransportError("lark-cli-unsafe")
+    else:
+        native = entry
+    return _native_fingerprint(native)
+
+
+def _child_environment():
+    child = dict(_FIXED_CHILD_ENVIRONMENT)
+    for name in _CHILD_ENVIRONMENT_NAMES:
+        value = os.environ.get(name)
+        if value is None:
+            continue
+        if type(value) is not str or not value or "\0" in value:
+            raise LarkTransportError("lark-cli-unsafe")
+        if name in {"HOME", "TMPDIR"} and not Path(value).is_absolute():
+            raise LarkTransportError("lark-cli-unsafe")
+        if name == "PATH" and any(
+            not entry or not Path(entry).is_absolute()
+            for entry in value.split(os.pathsep)
+        ):
+            raise LarkTransportError("lark-cli-unsafe")
+        child[name] = value
+    return child
+
+
+def _group_exists(process_group):
+    try:
+        os.killpg(process_group, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
+def _terminate_process_group(process):
+    process_group = process.pid
+    try:
+        os.killpg(process_group, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    deadline = time.monotonic() + _TERMINATION_GRACE_SECONDS
+    while _group_exists(process_group) and time.monotonic() < deadline:
+        try:
+            process.wait(timeout=min(0.02, max(0.0, deadline - time.monotonic())))
+        except subprocess.TimeoutExpired:
+            pass
+        time.sleep(0.01)
+    if _group_exists(process_group):
+        try:
+            os.killpg(process_group, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    try:
+        process.wait(timeout=_TERMINATION_GRACE_SECONDS)
+    except subprocess.TimeoutExpired:
+        try:
+            process.kill()
+        except ProcessLookupError:
+            pass
+        process.wait()
+
+
+class LarkCliTransport:
+    """Fixed-command, bounded subprocess transport for synthetic Lark tests."""
+
+    def __init__(self, profile):
+        self._profile = profile
+        self._fingerprint = _resolve_native_executable()
+        self._environment = _child_environment()
+
+    def _check_fingerprint(self):
+        try:
+            current = _native_fingerprint(Path(self._fingerprint.canonical_path))
+        except Exception:
+            raise LarkTransportError("lark-cli-fingerprint-changed") from None
+        if current != self._fingerprint:
+            raise LarkTransportError("lark-cli-fingerprint-changed")
+
+    def _execute(self, arguments, stdin, stdout_limit):
+        process = None
+        selector = None
+        streams = ()
+        try:
+            process = subprocess.Popen(
+                (self._fingerprint.canonical_path,) + arguments,
+                shell=False,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                close_fds=True,
+                start_new_session=True,
+                env=self._environment,
+            )
+            streams = (process.stdout, process.stderr)
+            try:
+                process.stdin.write(stdin)
+                process.stdin.close()
+            except BrokenPipeError:
+                process.stdin.close()
+
+            selector = selectors.DefaultSelector()
+            for stream in streams:
+                os.set_blocking(stream.fileno(), False)
+                selector.register(stream, selectors.EVENT_READ)
+            output = bytearray()
+            stderr_size = 0
+            deadline = time.monotonic() + self._profile.timeout_seconds
+            while selector.get_map():
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise LarkTransportError("lark-cli-timeout")
+                events = selector.select(min(remaining, 0.1))
+                if not events and process.poll() is not None:
+                    events = tuple(
+                        (key, selectors.EVENT_READ)
+                        for key in selector.get_map().values()
+                    )
+                for key, _ in events:
+                    try:
+                        chunk = os.read(key.fd, _READ_CHUNK_BYTES)
+                    except BlockingIOError:
+                        continue
+                    if not chunk:
+                        selector.unregister(key.fileobj)
+                        key.fileobj.close()
+                        continue
+                    if key.fileobj is process.stdout:
+                        output.extend(chunk)
+                        if len(output) > stdout_limit:
+                            raise LarkTransportError("lark-cli-output-limit")
+                    else:
+                        stderr_size += len(chunk)
+                        if stderr_size > self._profile.stderr_limit:
+                            raise LarkTransportError("lark-cli-output-limit")
+
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise LarkTransportError("lark-cli-timeout")
+            try:
+                return_code = process.wait(timeout=remaining)
+            except subprocess.TimeoutExpired:
+                raise LarkTransportError("lark-cli-timeout") from None
+            if return_code != 0:
+                raise LarkTransportError("lark-cli-failed")
+            if _group_exists(process.pid):
+                raise LarkTransportError("lark-cli-failed")
+            return bytes(output)
+        except BaseException:
+            if process is not None:
+                _terminate_process_group(process)
+            raise
+        finally:
+            if selector is not None:
+                selector.close()
+            if process is not None:
+                if process.stdin is not None and not process.stdin.closed:
+                    process.stdin.close()
+                for stream in streams:
+                    if stream is not None and not stream.closed:
+                        stream.close()
+                if process.poll() is None:
+                    _terminate_process_group(process)
+                else:
+                    process.wait()
+                self._check_fingerprint()
+
+    def _run(self, arguments, *, stdin=b"", stdout_limit):
+        self._check_fingerprint()
+        try:
+            return self._execute(arguments, stdin, stdout_limit)
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except LarkTransportError:
+            raise
+        except Exception:
+            raise LarkTransportError("lark-cli-failed") from None
+
+    def version(self):
+        raw = self._run(
+            ("--version",), stdout_limit=self._profile.control_stdout_limit
+        )
+        match = re.fullmatch(rb"lark-cli version (1\.0\.86)\n?", raw)
+        if match is None:
+            raise LarkTransportError("lark-cli-incompatible")
+        return match.group(1).decode("ascii")
+
+    def verify_user(self):
+        raw = self._run(
+            ("auth", "status", "--json", "--verify"),
+            stdout_limit=self._profile.control_stdout_limit,
+        )
+        return parse_verified_identity(raw)
+
+    @staticmethod
+    def _selector(selector):
+        try:
+            if (
+                type(selector) is not ParsedDocumentSelector
+                or TOKEN.fullmatch(selector.token) is None
+                or selector.commitment != selector_commitment(selector.token)
+            ):
+                raise ValueError
+            return selector
+        except Exception:
+            raise LarkTransportError("invalid-selector") from None
+
+    def observe(self, selector):
+        selector = self._selector(selector)
+        document = self._run(
+            (
+                "api", "GET",
+                "/open-apis/docx/v1/documents/" + selector.token,
+                "--as", "user",
+            ),
+            stdout_limit=self._profile.control_stdout_limit,
+        )
+        body = canonical_json(
+            {
+                "request_docs": [
+                    {"doc_token": selector.token, "doc_type": "docx"}
+                ],
+                "with_url": False,
+            }
+        )
+        metadata = self._run(
+            (
+                "drive", "metas", "batch_query", "--user-id-type", "open_id",
+                "--data", "-", "--as", "user", "--format", "json",
+            ),
+            stdin=body,
+            stdout_limit=self._profile.control_stdout_limit,
+        )
+        return parse_observation(document, metadata, selector.token)
+
+    def raw_content(self, selector):
+        selector = self._selector(selector)
+        return self._run(
+            (
+                "api", "GET",
+                "/open-apis/docx/v1/documents/" + selector.token + "/raw_content",
+                "--as", "user",
+            ),
+            stdout_limit=self._profile.raw_stdout_limit,
+        )

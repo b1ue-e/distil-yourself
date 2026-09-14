@@ -2,9 +2,15 @@
 
 import copy
 import dataclasses
+import base64
 import json
+import os
 import re
+import shutil
+import subprocess
 import sys
+import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -15,6 +21,7 @@ sys.path.insert(0, str(ROOT / "knowledge-distiller" / "scripts"))
 
 from knowledge_distiller import adapters, lark_cli_transport as transport
 from knowledge_distiller import lark_profile, native_adapters
+from knowledge_distiller.lark_selector import parse_document_selector
 
 
 TOKEN = "doxcn1234567890AbCdEfGhIjKl"
@@ -23,6 +30,26 @@ AUTH_FIXTURE = (FIXTURES / "auth-status.json").read_bytes()
 DOCUMENT_FIXTURE = (FIXTURES / "document-info.json").read_bytes()
 METADATA_FIXTURE = (FIXTURES / "drive-metadata.json").read_bytes()
 MISSING_SCOPE_FIXTURE = (FIXTURES / "missing-scope.json").read_bytes()
+RAW_FIXTURE = b'{"ok":true,"identity":"user","data":{"content":"opaque synthetic"}}'
+
+EXPECTED_COMMANDS = (
+    ("--version",),
+    ("auth", "status", "--json", "--verify"),
+    ("api", "GET", "/open-apis/docx/v1/documents/" + TOKEN, "--as", "user"),
+    (
+        "drive", "metas", "batch_query", "--user-id-type", "open_id",
+        "--data", "-", "--as", "user", "--format", "json",
+    ),
+    (
+        "api", "GET",
+        "/open-apis/docx/v1/documents/" + TOKEN + "/raw_content",
+        "--as", "user",
+    ),
+)
+DRIVE_STDIN = (
+    b'{"request_docs":[{"doc_token":"' + TOKEN.encode("ascii")
+    + b'","doc_type":"docx"}],"with_url":false}'
+)
 
 
 def encoded(value):
@@ -438,6 +465,366 @@ class LarkControlParserTest(unittest.TestCase):
         value["error"]["code"] = _IntSubclass(4242)
         with mock.patch.object(transport.adapters, "decode_event_graph_json", return_value=value):
             self.reject(lambda: transport.parse_missing_scope(b"{}"))
+
+
+class LarkProcessTransportTest(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.root.chmod(0o700)
+        self.bin = self.root / "path-bin"
+        self.bin.mkdir(mode=0o700)
+        self.executable = self.bin / "lark-cli"
+        self.command_path = self.root / "commands.jsonl"
+        self.stdin_path = self.root / "drive.stdin"
+        self.environment_path = self.root / "environment.json"
+        self.pid_path = self.root / "descendant.pid"
+        self.profile = lark_profile.load_pinned_profile()
+        self.selector = parse_document_selector(TOKEN)
+        self.environment = {
+            "HOME": str(self.root),
+            "PATH": str(self.bin),
+            "LANG": "C.UTF-8",
+            "LC_ALL": "C.UTF-8",
+            "TMPDIR": str(self.root),
+            "HTTPS_PROXY": "http://SYNTHETIC_PRIVATE_VALUE",
+            "LARK_API_BASE_URL": "https://SYNTHETIC_PRIVATE_VALUE",
+            "ACCESS_TOKEN": "SYNTHETIC_PRIVATE_VALUE",
+            "CLIENT_SECRET": "SYNTHETIC_PRIVATE_VALUE",
+            "CUSTOM_ENDPOINT": "SYNTHETIC_PRIVATE_VALUE",
+        }
+        self.write_fake()
+
+    def write_fake(self, mode="normal", path=None):
+        target = self.executable if path is None else Path(path)
+        target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        responses = {
+            "auth": base64.b64encode(AUTH_FIXTURE).decode("ascii"),
+            "document": base64.b64encode(DOCUMENT_FIXTURE).decode("ascii"),
+            "metadata": base64.b64encode(METADATA_FIXTURE).decode("ascii"),
+            "raw": base64.b64encode(RAW_FIXTURE).decode("ascii"),
+        }
+        source = f'''#!{sys.executable}
+import base64
+import json
+import os
+import signal
+import subprocess
+import sys
+import time
+
+MODE = {mode!r}
+COMMAND_PATH = {str(self.command_path)!r}
+STDIN_PATH = {str(self.stdin_path)!r}
+ENVIRONMENT_PATH = {str(self.environment_path)!r}
+PID_PATH = {str(self.pid_path)!r}
+RESPONSES = {responses!r}
+
+args = tuple(sys.argv[1:])
+stdin = sys.stdin.buffer.read()
+with open(COMMAND_PATH, "ab") as stream:
+    stream.write(json.dumps(args, separators=(",", ":")).encode("utf-8") + b"\\n")
+with open(ENVIRONMENT_PATH, "w", encoding="utf-8") as stream:
+    json.dump(dict(os.environ), stream, sort_keys=True)
+if args[:3] == ("drive", "metas", "batch_query"):
+    with open(STDIN_PATH, "wb") as stream:
+        stream.write(stdin)
+
+if MODE in {{"timeout", "partial"}}:
+    child = subprocess.Popen(
+        [sys.executable, "-c", "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    with open(PID_PATH, "w", encoding="ascii") as stream:
+        stream.write(str(child.pid))
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    if MODE == "partial":
+        sys.stdout.buffer.write(b"lark-cli version 1.0.86")
+        sys.stdout.buffer.flush()
+    time.sleep(60)
+if MODE == "descendant":
+    child = subprocess.Popen(
+        [sys.executable, "-c", "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    with open(PID_PATH, "w", encoding="ascii") as stream:
+        stream.write(str(child.pid))
+if MODE == "stdout-overflow":
+    sys.stdout.buffer.write(b"SYNTHETIC_PRIVATE_VALUE" * 50000)
+    raise SystemExit(0)
+if MODE == "stderr-overflow":
+    sys.stderr.buffer.write(b"SYNTHETIC_PRIVATE_VALUE" * 5000)
+    raise SystemExit(0)
+if MODE == "nonzero":
+    sys.stdout.buffer.write(b"SYNTHETIC_PRIVATE_VALUE")
+    sys.stderr.buffer.write(b"SYNTHETIC_PRIVATE_VALUE")
+    raise SystemExit(9)
+if MODE == "replace-self":
+    replacement = sys.argv[0] + ".replacement"
+    with open(replacement, "w", encoding="utf-8") as stream:
+        stream.write("#!/bin/sh\\nexit 99\\n")
+    os.chmod(replacement, 0o700)
+    os.replace(replacement, sys.argv[0])
+
+if args == ("--version",):
+    output = b"lark-cli version 9.9.9\\n" if MODE == "bad-version" else b"lark-cli version 1.0.86\\n"
+elif args == ("auth", "status", "--json", "--verify"):
+    output = base64.b64decode(RESPONSES["auth"])
+elif args[:3] == ("api", "GET", "/open-apis/docx/v1/documents/{TOKEN}"):
+    output = base64.b64decode(RESPONSES["document"])
+elif args[:3] == ("drive", "metas", "batch_query"):
+    output = base64.b64decode(RESPONSES["metadata"])
+elif args[:2] == ("api", "GET") and args[2].endswith("/raw_content"):
+    output = base64.b64decode(RESPONSES["raw"])
+else:
+    raise SystemExit(8)
+sys.stdout.buffer.write(output)
+'''
+        target.write_text(source, encoding="utf-8")
+        target.chmod(0o700)
+        return target
+
+    def client(self):
+        return transport.LarkCliTransport(self.profile)
+
+    def commands(self):
+        return tuple(
+            tuple(json.loads(line))
+            for line in self.command_path.read_text(encoding="utf-8").splitlines()
+        )
+
+    def assert_code_only(self, action, code):
+        with self.assertRaises(transport.LarkTransportError) as caught:
+            action()
+        self.assertEqual(caught.exception.code, code)
+        self.assertEqual(caught.exception.args, (code,))
+        rendered = str(caught.exception) + repr(caught.exception) + repr(vars(caught.exception))
+        for private in (
+            "SYNTHETIC_PRIVATE_VALUE", TOKEN, OWNER, str(self.root),
+            "Synthetic Document", "/open-apis/", "--version",
+        ):
+            self.assertNotIn(private, rendered)
+
+    def assert_pid_gone(self, path=None):
+        pid_path = self.pid_path if path is None else path
+        deadline = time.monotonic() + 3
+        while not pid_path.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertTrue(pid_path.exists())
+        pid = int(pid_path.read_text(encoding="ascii"))
+        while time.monotonic() < deadline:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return
+            time.sleep(0.01)
+        self.fail("synthetic descendant survived process-group cleanup")
+
+    def test_transport_uses_only_fixed_commands_and_canonical_drive_stdin(self):
+        with mock.patch.dict(os.environ, self.environment, clear=True):
+            with mock.patch.object(transport.shutil, "which", wraps=shutil.which) as which:
+                client = self.client()
+                self.assertEqual(client.version(), "1.0.86")
+                self.assertEqual(client.verify_user().open_id, OWNER)
+                self.assertEqual(client.observe(self.selector).revision, "7")
+                self.assertEqual(client.raw_content(self.selector), RAW_FIXTURE)
+        which.assert_called_once_with("lark-cli")
+        self.assertEqual(self.commands(), EXPECTED_COMMANDS)
+        self.assertEqual(self.stdin_path.read_bytes(), DRIVE_STDIN)
+
+    def test_transport_invokes_native_directly_without_shell_or_ambient_secrets(self):
+        calls = []
+        real_popen = subprocess.Popen
+
+        def record(*args, **kwargs):
+            calls.append((args, kwargs))
+            return real_popen(*args, **kwargs)
+
+        with mock.patch.dict(os.environ, self.environment, clear=True):
+            with mock.patch.object(transport.subprocess, "Popen", side_effect=record):
+                self.assertEqual(self.client().version(), "1.0.86")
+        self.assertEqual(len(calls), 1)
+        args, kwargs = calls[0]
+        self.assertEqual(args[0], (str(self.executable.resolve()), "--version"))
+        self.assertIs(kwargs["shell"], False)
+        self.assertIs(kwargs["close_fds"], True)
+        self.assertIs(kwargs["start_new_session"], True)
+        self.assertEqual(kwargs["stdin"], subprocess.PIPE)
+        self.assertEqual(kwargs["stdout"], subprocess.PIPE)
+        self.assertEqual(kwargs["stderr"], subprocess.PIPE)
+        expected_environment = {
+            "HOME", "PATH", "LANG", "LC_ALL", "TMPDIR",
+            "LARKSUITE_CLI_NO_UPDATE_NOTIFIER",
+            "LARKSUITE_CLI_NO_SKILLS_NOTIFIER",
+        }
+        self.assertEqual(set(kwargs["env"]), expected_environment)
+        child_env = json.loads(self.environment_path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            set(child_env) - {"__CF_USER_TEXT_ENCODING"},
+            expected_environment,
+        )
+        self.assertFalse(any(
+            marker in name
+            for name in child_env
+            for marker in ("TOKEN", "SECRET", "PROXY", "BASE_URL", "ENDPOINT")
+        ))
+
+    def test_packaged_wrapper_is_resolved_but_never_executed(self):
+        package = self.root / "package"
+        native = package / "bin" / "lark-cli"
+        self.write_fake(path=native)
+        wrapper = package / "scripts" / "run.js"
+        marker = self.root / "wrapper-executed"
+        wrapper.parent.mkdir(mode=0o700)
+        wrapper.write_text(f"#!{sys.executable}\nfrom pathlib import Path\nPath({str(marker)!r}).touch()\nraise SystemExit(99)\n", encoding="utf-8")
+        wrapper.chmod(0o700)
+        self.executable.unlink()
+        self.executable.symlink_to(wrapper)
+        with mock.patch.dict(os.environ, self.environment, clear=True):
+            self.assertEqual(self.client().version(), "1.0.86")
+        self.assertFalse(marker.exists())
+
+    def test_resolution_rejects_missing_relative_dangling_and_unsafe_targets(self):
+        cases = []
+        cases.append((None, "lark-cli-not-found"))
+        cases.append(("relative/lark-cli", "lark-cli-unsafe"))
+        dangling = self.root / "dangling"
+        dangling.symlink_to(self.root / "absent")
+        cases.append((str(dangling), "lark-cli-not-found"))
+        directory = self.root / "directory"
+        directory.mkdir(mode=0o700)
+        cases.append((str(directory), "lark-cli-unsafe"))
+        unsafe = self.write_fake(path=self.root / "unsafe")
+        unsafe.chmod(0o722)
+        cases.append((str(unsafe), "lark-cli-unsafe"))
+        for result, code in cases:
+            with self.subTest(result=result, code=code):
+                with mock.patch.dict(os.environ, self.environment, clear=True):
+                    with mock.patch.object(transport.shutil, "which", return_value=result):
+                        self.assert_code_only(self.client, code)
+
+    def test_resolution_rejects_unrecognized_wrapper_and_missing_native(self):
+        package = self.root / "bad-package"
+        other = package / "scripts" / "other-launcher"
+        self.write_fake(path=other)
+        entry = self.root / "other-entry"
+        entry.symlink_to(other)
+        missing_wrapper = self.root / "missing-package" / "scripts" / "run.js"
+        self.write_fake(path=missing_wrapper)
+        for result, code in (
+            (str(entry), "lark-cli-unsafe"),
+            (str(missing_wrapper), "lark-cli-not-found"),
+        ):
+            with self.subTest(result=result):
+                with mock.patch.dict(os.environ, self.environment, clear=True):
+                    with mock.patch.object(transport.shutil, "which", return_value=result):
+                        self.assert_code_only(self.client, code)
+
+    def test_version_selector_and_fingerprint_checks_fail_closed(self):
+        with mock.patch.dict(os.environ, self.environment, clear=True):
+            self.write_fake("bad-version")
+            self.assert_code_only(self.client().version, "lark-cli-incompatible")
+
+            self.write_fake()
+            client = self.client()
+            self.write_fake("normal")
+            self.assert_code_only(client.version, "lark-cli-fingerprint-changed")
+
+            self.write_fake("replace-self")
+            client = self.client()
+            self.assert_code_only(client.version, "lark-cli-fingerprint-changed")
+
+            self.write_fake()
+            client = self.client()
+            self.assert_code_only(lambda: client.observe(TOKEN), "invalid-selector")
+            self.assert_code_only(lambda: client.raw_content(TOKEN), "invalid-selector")
+
+    def test_timeout_and_partial_output_kill_the_process_group(self):
+        quick = dataclasses.replace(self.profile, timeout_seconds=0.75)
+        for mode in ("timeout", "partial"):
+            with self.subTest(mode=mode):
+                if self.pid_path.exists():
+                    self.pid_path.unlink()
+                self.write_fake(mode)
+                with mock.patch.dict(os.environ, self.environment, clear=True):
+                    self.assert_code_only(
+                        transport.LarkCliTransport(quick).version,
+                        "lark-cli-timeout",
+                    )
+                self.assert_pid_gone()
+
+    def test_output_limits_discard_partial_data_and_reap_the_process(self):
+        for mode in ("stdout-overflow", "stderr-overflow"):
+            with self.subTest(mode=mode):
+                self.write_fake(mode)
+                with mock.patch.dict(os.environ, self.environment, clear=True):
+                    self.assert_code_only(
+                        self.client().version,
+                        "lark-cli-output-limit",
+                    )
+
+    def test_nonzero_exit_is_code_only_and_does_not_leak_descriptors(self):
+        self.write_fake("nonzero")
+        before = len(os.listdir("/dev/fd"))
+        with mock.patch.dict(os.environ, self.environment, clear=True):
+            client = self.client()
+            for _ in range(4):
+                self.assert_code_only(client.version, "lark-cli-failed")
+        self.assertEqual(len(os.listdir("/dev/fd")), before)
+
+    def test_keyboard_interrupt_propagates_after_child_cleanup(self):
+        self.write_fake("timeout")
+        real_selector = transport.selectors.DefaultSelector
+        real_popen = subprocess.Popen
+        processes = []
+
+        def start(*args, **kwargs):
+            process = real_popen(*args, **kwargs)
+            processes.append(process)
+            return process
+
+        class InterruptingSelector:
+            def __init__(inner_self):
+                inner_self.delegate = real_selector()
+
+            def register(inner_self, *args, **kwargs):
+                return inner_self.delegate.register(*args, **kwargs)
+
+            def unregister(inner_self, *args, **kwargs):
+                return inner_self.delegate.unregister(*args, **kwargs)
+
+            def get_map(inner_self):
+                return inner_self.delegate.get_map()
+
+            def select(inner_self, timeout=None):
+                deadline = time.monotonic() + 1
+                while not self.pid_path.exists() and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                raise KeyboardInterrupt
+
+            def close(inner_self):
+                return inner_self.delegate.close()
+
+        with mock.patch.dict(os.environ, self.environment, clear=True):
+            with mock.patch.object(transport.subprocess, "Popen", side_effect=start):
+                with mock.patch.object(transport.selectors, "DefaultSelector", InterruptingSelector):
+                    with self.assertRaises(KeyboardInterrupt):
+                        self.client().version()
+        self.assertEqual(len(processes), 1)
+        self.assertIsNotNone(processes[0].poll())
+        if self.pid_path.exists():
+            self.assert_pid_gone()
+
+    def test_successful_parent_with_live_descendant_is_rejected_and_cleaned(self):
+        self.write_fake("descendant")
+        with mock.patch.dict(os.environ, self.environment, clear=True):
+            self.assert_code_only(self.client().version, "lark-cli-failed")
+        self.assert_pid_gone()
 
 
 if __name__ == "__main__":
