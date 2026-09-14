@@ -348,9 +348,7 @@ def _cleanup_process(process, selector, streams, terminate):
     for stream in streams:
         if stream is not None and not stream.closed:
             attempt(stream.close)
-    if process.poll() is None:
-        attempt(lambda: _terminate_process_group(process))
-    if process.poll() is None:
+    if terminate:
         attempt(process.kill)
     attempt(lambda: process.wait(timeout=_TERMINATION_GRACE_SECONDS))
     return first_error

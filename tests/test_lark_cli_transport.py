@@ -481,6 +481,7 @@ class LarkProcessTransportTest(unittest.TestCase):
         self.stdin_path = self.root / "drive.stdin"
         self.environment_path = self.root / "environment.json"
         self.pid_path = self.root / "descendant.pid"
+        self.ready_path = self.root / "descendant.ready"
         self.profile = lark_profile.load_pinned_profile()
         self.selector = parse_document_selector(TOKEN)
         self.environment = {
@@ -521,6 +522,7 @@ COMMAND_PATH = {str(self.command_path)!r}
 STDIN_PATH = {str(self.stdin_path)!r}
 ENVIRONMENT_PATH = {str(self.environment_path)!r}
 PID_PATH = {str(self.pid_path)!r}
+READY_PATH = {str(self.ready_path)!r}
 RESPONSES = {responses!r}
 
 args = tuple(sys.argv[1:])
@@ -533,9 +535,22 @@ if args[:3] == ("drive", "metas", "batch_query"):
     with open(STDIN_PATH, "wb") as stream:
         stream.write(stdin)
 
-if MODE in {{"timeout", "partial"}}:
+if MODE in {{"timeout", "partial", "descendant"}}:
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    child_ready_path = PID_PATH + ".child-ready"
+    child_program = """import os
+import signal
+import sys
+import time
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+temporary = sys.argv[1] + '.tmp'
+with open(temporary, 'w', encoding='ascii') as stream:
+    stream.write('ready')
+os.replace(temporary, sys.argv[1])
+time.sleep(60)
+"""
     child = subprocess.Popen(
-        [sys.executable, "-c", "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)"],
+        [sys.executable, "-c", child_program, child_ready_path],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -544,22 +559,19 @@ if MODE in {{"timeout", "partial"}}:
     with open(temporary_pid_path, "w", encoding="ascii") as stream:
         stream.write(str(child.pid))
     os.replace(temporary_pid_path, PID_PATH)
-    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    while not os.path.exists(child_ready_path):
+        if child.poll() is not None:
+            raise SystemExit(7)
+        time.sleep(0.005)
+    temporary_ready_path = READY_PATH + ".tmp"
+    with open(temporary_ready_path, "w", encoding="ascii") as stream:
+        stream.write("ready")
+    os.replace(temporary_ready_path, READY_PATH)
     if MODE == "partial":
         sys.stdout.buffer.write(b"lark-cli version 1.0.86")
         sys.stdout.buffer.flush()
-    time.sleep(60)
-if MODE == "descendant":
-    child = subprocess.Popen(
-        [sys.executable, "-c", "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)"],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    temporary_pid_path = PID_PATH + ".tmp"
-    with open(temporary_pid_path, "w", encoding="ascii") as stream:
-        stream.write(str(child.pid))
-    os.replace(temporary_pid_path, PID_PATH)
+    if MODE != "descendant":
+        time.sleep(60)
 if MODE == "stdout-overflow":
     sys.stdout.buffer.write(b"SYNTHETIC_PRIVATE_VALUE" * 50000)
     raise SystemExit(0)
@@ -616,12 +628,12 @@ sys.stdout.buffer.write(output)
         ):
             self.assertNotIn(private, rendered)
 
-    def published_pid(self, timeout=3):
+    def published_pid(self, timeout=3, require_ready=True):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             try:
                 pid = int(self.pid_path.read_text(encoding="ascii"))
-                if pid > 1:
+                if pid > 1 and (not require_ready or self.ready_path.exists()):
                     return pid
             except (FileNotFoundError, ValueError):
                 pass
@@ -629,13 +641,22 @@ sys.stdout.buffer.write(output)
         return None
 
     def cleanup_descendant(self):
-        pid = self.published_pid(timeout=0.05)
+        pid = self.published_pid(timeout=0.05, require_ready=False)
         if pid is None:
             return
         try:
             os.kill(pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
+
+    def clear_descendant_state(self):
+        for suffix in ("", ".tmp", ".child-ready", ".child-ready.tmp"):
+            path = Path(str(self.pid_path) + suffix)
+            if path.exists():
+                path.unlink()
+        for path in (self.ready_path, Path(str(self.ready_path) + ".tmp")):
+            if path.exists():
+                path.unlink()
 
     def assert_pid_gone(self):
         pid = self.published_pid()
@@ -645,6 +666,7 @@ sys.stdout.buffer.write(output)
             try:
                 os.kill(pid, 0)
             except ProcessLookupError:
+                self.clear_descendant_state()
                 return
             time.sleep(0.01)
         self.fail("synthetic descendant survived process-group cleanup")
@@ -769,11 +791,22 @@ sys.stdout.buffer.write(output)
             self.assert_code_only(lambda: client.raw_content(TOKEN), "invalid-selector")
 
     def test_timeout_and_partial_output_kill_the_process_group(self):
-        quick = dataclasses.replace(self.profile, timeout_seconds=0.75)
+        owner = self
+
+        class ReadyTimeoutProfile:
+            @property
+            def timeout_seconds(inner_self):
+                if owner.published_pid(timeout=10) is None:
+                    raise AssertionError("synthetic descendant was not ready")
+                return 0.2
+
+            def __getattr__(inner_self, name):
+                return getattr(owner.profile, name)
+
+        quick = ReadyTimeoutProfile()
         for mode in ("timeout", "partial"):
             with self.subTest(mode=mode):
-                if self.pid_path.exists():
-                    self.pid_path.unlink()
+                self.clear_descendant_state()
                 self.write_fake(mode)
                 with mock.patch.dict(os.environ, self.environment, clear=True):
                     self.assert_code_only(
@@ -866,65 +899,92 @@ sys.stdout.buffer.write(output)
         )
         real_selector = transport.selectors.DefaultSelector
         real_popen = subprocess.Popen
-        for primary, expected_type, expected_code in cases:
-            with self.subTest(primary_type=type(primary).__name__):
-                processes = []
+        for poll_error_type in (RuntimeError, KeyboardInterrupt):
+            for primary, expected_type, expected_code in cases:
+                with self.subTest(
+                    poll_error=poll_error_type.__name__,
+                    primary_type=type(primary).__name__,
+                ):
+                    processes = []
 
-                def start(*args, **kwargs):
-                    process = real_popen(*args, **kwargs)
-                    processes.append(process)
-                    return process
+                    class PollFaultProcess:
+                        def __init__(inner_self, delegate):
+                            inner_self.delegate = delegate
+                            inner_self.kill_calls = 0
+                            inner_self.wait_calls = 0
 
-                class FaultingSelector:
-                    def __init__(inner_self):
-                        inner_self.delegate = real_selector()
+                        def __getattr__(inner_self, name):
+                            return getattr(inner_self.delegate, name)
 
-                    def register(inner_self, *args, **kwargs):
-                        return inner_self.delegate.register(*args, **kwargs)
+                        def poll(inner_self):
+                            raise poll_error_type("SYNTHETIC_PRIVATE_VALUE")
 
-                    def unregister(inner_self, *args, **kwargs):
-                        return inner_self.delegate.unregister(*args, **kwargs)
+                        def kill(inner_self):
+                            inner_self.kill_calls += 1
+                            return inner_self.delegate.kill()
 
-                    def get_map(inner_self):
-                        return inner_self.delegate.get_map()
+                        def wait(inner_self, *args, **kwargs):
+                            inner_self.wait_calls += 1
+                            return inner_self.delegate.wait(*args, **kwargs)
 
-                    def select(inner_self, timeout=None):
-                        deadline = time.monotonic() + 1
-                        while not self.command_path.exists() and time.monotonic() < deadline:
-                            time.sleep(0.01)
-                        raise primary
+                    def start(*args, **kwargs):
+                        process = PollFaultProcess(real_popen(*args, **kwargs))
+                        processes.append(process)
+                        return process
 
-                    def close(inner_self):
-                        inner_self.delegate.close()
-                        raise OSError("SYNTHETIC_PRIVATE_VALUE")
+                    class FaultingSelector:
+                        def __init__(inner_self):
+                            inner_self.delegate = real_selector()
 
-                if self.command_path.exists():
-                    self.command_path.unlink()
-                with mock.patch.dict(os.environ, self.environment, clear=True):
-                    client = self.client()
-                    changed = transport.LarkTransportError(
-                        "lark-cli-fingerprint-changed"
-                    )
-                    with mock.patch.object(
-                        client, "_check_fingerprint", side_effect=(None, changed)
-                    ) as fingerprint:
+                        def register(inner_self, *args, **kwargs):
+                            return inner_self.delegate.register(*args, **kwargs)
+
+                        def unregister(inner_self, *args, **kwargs):
+                            return inner_self.delegate.unregister(*args, **kwargs)
+
+                        def get_map(inner_self):
+                            return inner_self.delegate.get_map()
+
+                        def select(inner_self, timeout=None):
+                            deadline = time.monotonic() + 1
+                            while not self.command_path.exists() and time.monotonic() < deadline:
+                                time.sleep(0.01)
+                            raise primary
+
+                        def close(inner_self):
+                            inner_self.delegate.close()
+                            raise OSError("SYNTHETIC_PRIVATE_VALUE")
+
+                    if self.command_path.exists():
+                        self.command_path.unlink()
+                    with mock.patch.dict(os.environ, self.environment, clear=True):
+                        client = self.client()
+                        changed = transport.LarkTransportError(
+                            "lark-cli-fingerprint-changed"
+                        )
                         with mock.patch.object(
-                            transport.subprocess, "Popen", side_effect=start
-                        ):
+                            client, "_check_fingerprint", side_effect=(None, changed)
+                        ) as fingerprint:
                             with mock.patch.object(
-                                transport.selectors,
-                                "DefaultSelector",
-                                FaultingSelector,
+                                transport.subprocess, "Popen", side_effect=start
                             ):
-                                with self.assertRaises(expected_type) as caught:
-                                    client.version()
-                fingerprint.assert_has_calls((mock.call(), mock.call()))
-                self.assertEqual(len(processes), 1)
-                self.assertIsNotNone(processes[0].poll())
-                if expected_code is None:
-                    self.assertIs(caught.exception, primary)
-                else:
-                    self.assertEqual(caught.exception.code, expected_code)
+                                with mock.patch.object(
+                                    transport.selectors,
+                                    "DefaultSelector",
+                                    FaultingSelector,
+                                ):
+                                    with self.assertRaises(expected_type) as caught:
+                                        client.version()
+                    fingerprint.assert_has_calls((mock.call(), mock.call()))
+                    self.assertEqual(len(processes), 1)
+                    process = processes[0]
+                    self.assertIsNotNone(process.delegate.poll())
+                    self.assertGreaterEqual(process.kill_calls, 1)
+                    self.assertGreaterEqual(process.wait_calls, 1)
+                    if expected_code is None:
+                        self.assertIs(caught.exception, primary)
+                    else:
+                        self.assertEqual(caught.exception.code, expected_code)
 
     def test_rejects_invalid_home_tmpdir_and_path_environment_values(self):
         cases = (
