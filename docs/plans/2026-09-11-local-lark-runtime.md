@@ -544,7 +544,7 @@ git commit -m "feat: add bounded Lark CLI transport"
 - Modify: `tests/test_brokers.py`
 - Modify: `tests/test_ingestion.py`
 
-- [ ] **Step 1: Write failing broker and ingestion binding tests**
+- [x] **Step 1: Write failing broker and ingestion binding tests**
 
 Add committed-selector acceptance and substitution rejection while retaining the legacy literal-selector tests:
 
@@ -568,7 +568,7 @@ def test_lark_selector_commitment_and_ambient_user_are_bound(self):
 
 Reject a different token, digest, owner, revision, user, non-empty ambient environment, boolean receipt flags, and any empty-variable mode paired with a non-user binding. Confirm the old explicit-secret/literal-selector broker path still passes unchanged. Add an ingestion test proving neither raw token nor URL appears in committed generation files.
 
-- [ ] **Step 2: Run focused broker tests red**
+- [x] **Step 2: Run focused broker tests red**
 
 Run:
 
@@ -580,7 +580,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest \
 
 Expected: FAIL because Lark currently requires a literal selector and at least one secret variable.
 
-- [ ] **Step 3: Implement backward-compatible commitment and ambient binding**
+- [x] **Step 3: Implement backward-compatible commitment and ambient binding**
 
 In `_lark_request`, normalize the request selector with `parse_document_selector`. If `context.selector` matches `sha256:[0-9a-f]{64}`, compare it in constant time to the normalized commitment; otherwise retain the exact legacy literal comparison. Keep revision and session-range checks unchanged.
 
@@ -588,7 +588,7 @@ Allow `required_variables` length `0..8`. For the zero-variable case, require a 
 
 Change the standalone runner receipt and broker snapshot selector digest to the already validated context commitment, rather than hashing the commitment a second time. Update `_validated_snapshot` to independently repeat the same normalized-token/commitment comparison for Lark, while preserving legacy literal mode and all Codex behavior.
 
-- [ ] **Step 4: Run broker and ingestion regressions green**
+- [x] **Step 4: Run broker and ingestion regressions green**
 
 Run:
 
@@ -599,7 +599,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 -W error::ResourceWarning -m unittest \
 
 Expected: PASS for committed standalone Lark, legacy injected Lark, and committed/literal Codex paths.
 
-- [ ] **Step 5: Commit the broker binding**
+- [x] **Step 5: Commit the broker binding**
 
 ```bash
 git add knowledge-distiller/scripts/knowledge_distiller/brokers.py \
