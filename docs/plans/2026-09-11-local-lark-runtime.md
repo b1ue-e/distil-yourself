@@ -721,7 +721,7 @@ git commit -m "feat: orchestrate owner-only Lark ingestion"
 - Modify: `tests/test_cli.py`
 - Modify: `tests/test_lark_runtime.py`
 
-- [ ] **Step 1: Write failing CLI boundary and vertical tests**
+- [x] **Step 1: Write failing CLI boundary and vertical tests**
 
 Add parser/delegation tests for:
 
@@ -750,7 +750,7 @@ def test_lark_production_profile_rejects_before_executable_or_network(self):
 
 The synthetic vertical test patches only `_require_live_ingestion` inside the test process to return a frozen synthetic-enabled profile, places the executable fixture first in temporary PATH, calls `kd_cli.main`, and inspects the real temporary task generation.
 
-- [ ] **Step 2: Run CLI tests red**
+- [x] **Step 2: Run CLI tests red**
 
 Run:
 
@@ -762,7 +762,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest \
 
 Expected: FAIL because the command and error mapping do not exist.
 
-- [ ] **Step 3: Add the exact CLI command and bounded mapping**
+- [x] **Step 3: Add the exact CLI command and bounded mapping**
 
 Import `lark_runtime` and add the bounded reader:
 
@@ -799,7 +799,7 @@ if options.command == "ingest-lark-document":
 
 Map allowlisted `LarkRuntimeError` codes to exit 2 with the existing canonical `invalid-input` envelope. Leave `ingestion.IngestionError` at exit 3. Do not add a probe command, transport/profile override, identity option, endpoint option, executable option, auto-login path, or raw error passthrough.
 
-- [ ] **Step 4: Run CLI and synthetic end-to-end suites green**
+- [x] **Step 4: Run CLI and synthetic end-to-end suites green**
 
 Run:
 
@@ -810,7 +810,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 -W error::ResourceWarning -m unittest \
 
 Expected: PASS; the synthetic command handler reaches `source_kind=document`, while an unpatched production invocation stops at `lark-live-disabled` before `shutil.which` or any Lark subprocess.
 
-- [ ] **Step 5: Commit the CLI milestone**
+- [x] **Step 5: Commit the CLI milestone**
 
 ```bash
 git add knowledge-distiller/scripts/kd.py tests/test_cli.py tests/test_lark_runtime.py
