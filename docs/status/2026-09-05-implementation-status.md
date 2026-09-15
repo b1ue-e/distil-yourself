@@ -4,9 +4,9 @@
 
 ## 当前结论
 
-`knowledge-distiller` 已完成既有 adapter-contract、core dual-source loop、standalone LOCAL CODEX runtime，以及 standalone synthetic Lark runtime milestone 的 Task 1–7 代码和 Task 8 用户契约。新 Lark 命令已贯通 closed request、canonical selector、synthetic control parsers、native-only bounded transport、owner/revision observational sandwich、既有 broker/adapter/redaction/provenance 与 atomic ingestion；但 checked-in profile 固定为 `synthetic-only`，所以生产调用即使带 `--allow-live-read` 也会以 `lark-live-disabled` 在 executable/network 之前停止。该里程碑没有读取真实 Lark 文档，也不代表完整 v1 或 real-read readiness。
+`knowledge-distiller` 已完成既有 adapter-contract、core dual-source loop、standalone LOCAL CODEX runtime，以及 standalone synthetic Lark runtime milestone 的 Task 1–8。新 Lark 命令已贯通 closed request、canonical selector、synthetic control parsers、native-only bounded transport、owner/revision observational sandwich、既有 broker/adapter/redaction/provenance 与 atomic ingestion；但 checked-in profile 固定为 `synthetic-only`，所以生产调用即使带 `--allow-live-read` 也会以 `lark-live-disabled` 在 executable/network 之前停止。该里程碑没有读取真实 Lark 文档，也不代表完整 v1 或 real-read readiness。
 
-Task 8 的独立规格/安全与质量/可读性复审尚待 controller 完成；以下旧章节是历史里程碑记录，其当时测试数字和“后续工作”不得解读为当前能力边界。Standalone Lark 的 canonical and single authority 是 [runtime design](../specs/2026-09-11-local-lark-runtime-design.md)；本节、workflow、authorization 与 adapter compatibility 只记录状态或分主题操作摘要。
+Task 8 的独立规格/安全终审为 `SPEC PASS`，质量/可读性终审为 `READY`，Critical、Important、Minor 均无遗留；随后整套 standalone Lark milestone 的跨任务终审同样为 `READY`。以下旧章节是历史里程碑记录，其当时测试数字和“后续工作”不得解读为当前能力边界。Standalone Lark 的 canonical and single authority 是 [runtime design](../specs/2026-09-11-local-lark-runtime-design.md)；本节、workflow、authorization 与 adapter compatibility 只记录状态或分主题操作摘要。
 
 Live activation 尚缺且只缺以下三个独立 gate：
 
@@ -24,7 +24,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 -W error::ResourceWarning -m unittest discover
 
 精确 tuple `lark / 1.0.0 / 1.0.86 / docx-v1-raw-content-v1` 为 `normalizer-supported`，并有全合成 standalone runtime；它没有通过 approved exact-document probe，不能声称 actual CLI response compatibility 或 real-read readiness。`codex / 1.0.0 / 0.153.0 / rollout-jsonl-v1` 已进入 event-graph allowlist，并由 standalone LOCAL CODEX runtime 固定支持。两条 standalone 路径都不做 automatic discovery；Claude Code 与 Trae session adapter 仍为 `blocked`。
 
-Task 8 文档契约按 TDD 完成：初始测试因缺少 `ingest-lark-document` 入口事实而 RED；质量修复将 Lark contract 拆成 command/schema、authority/profile 和 status/design 三个职责测试，并先因含混 authority route 与 probe/status 表述而 RED。更新后 `test_skill_contract` 为 30/30 GREEN，Lark/runtime 相关 focused suite 为 209/209，严格 full suite 为 519/519。`compileall`、`git diff --check`、仓库无 `__pycache__`、指定真实 Lark URL/token/Open ID 扫描均通过。独立 review 结论由后续 controller 记录，本节不预先声称通过。
+Task 8 文档契约按 TDD 完成：初始测试因缺少 `ingest-lark-document` 入口事实而 RED；质量修复将 Lark contract 拆成 command/schema、authority/profile 和 status/design 三个职责测试，并先因含混 authority route 与 probe/status 表述而 RED。最终 `test_skill_contract` 为 30/30 GREEN；加入 legacy Lark 兼容回归后，Lark/runtime 相关 focused suite 为 212/212，严格 full suite 为 522/522。`compileall`、`git diff --check`、仓库无 `__pycache__`、指定真实 Lark URL/token/Open ID 扫描均通过。
 
 ## 分支与本地里程碑
 
