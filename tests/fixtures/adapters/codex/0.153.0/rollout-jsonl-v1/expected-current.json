@@ -1,0 +1,10 @@
+{
+  "adapter": ["codex", "1.0.0", "0.153.0", "rollout-jsonl-v1"],
+  "event_count": 5,
+  "edge_count": 1,
+  "event_types": ["message", "tool-call", "tool-result", "message", "compacted-summary"],
+  "edge_types": ["tool-result-of"],
+  "segment_types": ["text", "tool-call-summary", "tool-result-summary", "text", "compacted-summary"],
+  "claim_eligible": [true, false, false, false, false],
+  "loss_codes": ["hidden-unexposed-model-reasoning"]
+}

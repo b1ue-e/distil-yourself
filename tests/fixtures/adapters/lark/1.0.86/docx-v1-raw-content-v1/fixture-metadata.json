@@ -1,0 +1,19 @@
+{
+  "adapter_version": "1.0.0",
+  "comment_content_requested": false,
+  "content_retained_from_observation": false,
+  "endpoint": "GET /open-apis/docx/v1/documents/:document_id/raw_content",
+  "native_schema_version": "docx-v1-raw-content-v1",
+  "observed_cli_version": "1.0.86",
+  "observed_revision": "3365",
+  "redaction_transform": "knowledge-distiller:redaction:v1",
+  "response_schema_digest": "sha256:9ea00db953bf91884d198de7a10282a0c519cefc0065b5f113bc8cce528d273f",
+  "response_schema_shape": {
+    "data": {
+      "content": "string"
+    },
+    "identity": "literal:user",
+    "ok": "literal:true"
+  },
+  "source_content_digest_retained": false
+}

@@ -1,0 +1,23 @@
+{
+  "skill_name": "knowledge-distiller",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "从这篇飞书复盘文档开始，帮我找出我反复使用、值得沉淀成 skill 的排障能力。先告诉我还需要哪些相关材料。",
+      "expected_output": "Triggers discover mode, treats the link as metadata-only until exact content authority exists, and proposes bounded related sources without reading them.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "继续昨天暂停的知识蒸馏任务。材料主要来自我的 Codex 和 Claude Code 会话，先恢复到上次检查点。",
+      "expected_output": "Triggers the resume operation, preserves the recorded mode, validates saved state and authorization before continuing, and reports unsupported persistence or session adapters honestly in the foundation milestone.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "把这份公开的 Kubernetes 教程总结成十条学习笔记，不需要结合我的经验。",
+      "expected_output": "Does not trigger personal-knowledge distillation; routes to ordinary summarization because no personal evidence or judgment is being distilled.",
+      "files": []
+    }
+  ]
+}
