@@ -60,6 +60,41 @@ class SkillContractTest(unittest.TestCase):
     def normalized_text(self, path: Path) -> str:
         return " ".join(path.read_text(encoding="utf-8").split())
 
+    def numbered_list_in_section(
+        self, text: str, heading: str, lead: str
+    ) -> tuple[tuple[int, str], ...]:
+        lines = text.splitlines()
+        try:
+            section_start = lines.index(heading)
+        except ValueError:
+            return ()
+        heading_match = re.fullmatch(r"(#+) .+", heading)
+        if heading_match is None:
+            return ()
+        level = heading_match.group(1)
+        section_end = next(
+            (
+                index
+                for index in range(section_start + 1, len(lines))
+                if lines[index].startswith(level + " ")
+            ),
+            len(lines),
+        )
+        section = lines[section_start + 1:section_end]
+        try:
+            list_start = section.index(lead) + 1
+        except ValueError:
+            return ()
+        while list_start < len(section) and not section[list_start]:
+            list_start += 1
+        items = []
+        for line in section[list_start:]:
+            match = re.fullmatch(r"([1-9][0-9]*)\. (.+)[；。]", line)
+            if match is None:
+                break
+            items.append((int(match.group(1)), match.group(2)))
+        return tuple(items)
+
     def test_frontmatter_is_discoverable(self) -> None:
         text = self.skill_text()
         match = re.match(r"\A---\n(.*?)\n---\n", text, re.DOTALL)
@@ -695,12 +730,49 @@ class SkillContractTest(unittest.TestCase):
             self.assertIn(requirement, adapter)
 
     def test_lark_status_and_design_distinguish_milestone_and_probes(self) -> None:
-        status = self.normalized_text(STATUS_FILE)
+        status_source = STATUS_FILE.read_text(encoding="utf-8")
+        heading = "## 当前结论"
+        lead = "Live activation 尚缺且只缺以下三个独立 gate："
+        gate_lines = (
+            "1. endpoint-integrity evidence；\n"
+            "2. accepted consistency mode；\n"
+            "3. one explicitly approved exact-document probe。"
+        )
+        expected_gates = (
+            (1, "endpoint-integrity evidence"),
+            (2, "accepted consistency mode"),
+            (3, "one explicitly approved exact-document probe"),
+        )
+
+        def require_canonical_gates(source: str) -> None:
+            self.assertEqual(
+                self.numbered_list_in_section(source, heading, lead),
+                expected_gates,
+            )
+
+        require_canonical_gates(status_source)
+        mutations = {
+            "added": gate_lines + "\n4. unexpected gate；",
+            "missing": gate_lines.replace("2. accepted consistency mode；\n", ""),
+            "reordered": (
+                "1. accepted consistency mode；\n"
+                "2. endpoint-integrity evidence；\n"
+                "3. one explicitly approved exact-document probe。"
+            ),
+        }
+        for name, mutated_lines in mutations.items():
+            with self.subTest(gate_mutation=name), self.assertRaises(AssertionError):
+                require_canonical_gates(status_source.replace(gate_lines, mutated_lines))
+        moved = status_source.replace(gate_lines, "").replace(
+            "## 分支与本地里程碑",
+            "## 分支与本地里程碑\n\n" + gate_lines,
+        )
+        with self.subTest(gate_mutation="moved"), self.assertRaises(AssertionError):
+            require_canonical_gates(moved)
+
+        status = " ".join(status_source.split())
         for requirement in (
             "synthetic Lark runtime milestone",
-            "endpoint-integrity evidence",
-            "accepted consistency mode",
-            "one explicitly approved exact-document probe",
             "feature branch: `feat/implement_knowledge_distiller`",
             "historical normalizer-only probe",
             "standalone-runtime control-contract probe",
@@ -708,8 +780,14 @@ class SkillContractTest(unittest.TestCase):
         ):
             self.assertIn(requirement, status)
         for stale_value in (
-            "work remains local", "has not been pushed", "origin", "ahead",
-            "1304572", "a3be2f5",
+            "work remains local and has not been pushed",
+            "Current origin remains",
+            "origin 仍在",
+            "commits ahead",
+            "ahead 19",
+            "ahead 20",
+            "1304572",
+            "a3be2f5",
         ):
             self.assertNotIn(stale_value, status)
 
