@@ -32,6 +32,8 @@ def digest(value):
 TOKEN = "doxcn1234567890AbCdEfGhIjKl"
 OTHER_TOKEN = "doxcn1234567890AbCdEfGhIjKm"
 DOCUMENT_URL = "https://tenant.larkoffice.com/docx/" + TOKEN
+LEGACY_TOKEN = "DocABC123"
+LEGACY_DOCUMENT_URL = "https://tenant.larkoffice.com/docx/" + LEGACY_TOKEN
 
 
 class IngestionTest(unittest.TestCase):
@@ -106,20 +108,28 @@ class IngestionTest(unittest.TestCase):
             redaction_key=self.key)
         return result, calls
 
-    def test_lark_snapshot_is_redacted_and_atomically_persisted(self):
+    def test_legacy_lark_bare_token_is_redacted_and_atomically_persisted(self):
         raw = b'{"ok":true,"identity":"user","data":{"content":"password=synthetic-secret"}}'
-        context, grant, attestation = self.authorization(TOKEN, revision="3365")
+        context, grant, attestation = self.authorization(
+            LEGACY_TOKEN, revision="3365")
         request = ingestion.IngestionRequest(
             source_kind="lark", transaction_id="ingest-lark",
             expected_generation_id=self.ingest_state.generation_id,
             authorization_context=context, content_grant=grant,
             authority_attestation=attestation,
-            native_request=brokers.LarkRequest(TOKEN, "3365"),
+            native_request=brokers.LarkRequest(LEGACY_TOKEN, "3365"),
             native_locator_id=digest("document-token"))
-        acquired = self.snapshot(
-            raw, "lark", "1.0.86", native_adapters.LARK_NATIVE_SCHEMA_DIGEST)
+        acquired = replace(
+            self.snapshot(
+                raw, "lark", "1.0.86",
+                native_adapters.LARK_NATIVE_SCHEMA_DIGEST),
+            selector_digest=digest(LEGACY_TOKEN))
 
-        result, calls = self.ingest(request, acquired)
+        with mock.patch.object(
+                lark_selector, "parse_document_selector",
+                side_effect=AssertionError("new parser used for legacy selector")) as parser:
+            result, calls = self.ingest(request, acquired)
+        parser.assert_not_called()
 
         self.assertEqual(calls, ["lark"])
         self.assertEqual((result.status, result.source_kind, result.source_item_count),
@@ -136,7 +146,44 @@ class IngestionTest(unittest.TestCase):
         evidence = json.loads(
             (generation / "evidence/lark-native.json").read_text(encoding="utf-8"))
         self.assertEqual(evidence["source_snapshot_id"], digest(raw))
+        self.assertEqual(acquired.selector_digest, digest(LEGACY_TOKEN))
         self.assertNotIn(b"synthetic-secret", (self.root / "event-log.frames").read_bytes())
+
+    def test_legacy_lark_url_preserves_old_selector_digest(self):
+        raw = b'{"ok":true,"identity":"user","data":{"content":"safe"}}'
+        context, grant, attestation = self.authorization(
+            LEGACY_DOCUMENT_URL, revision="3365")
+        request = ingestion.IngestionRequest(
+            "lark", "ingest-lark-legacy-url",
+            self.ingest_state.generation_id, context, grant, attestation,
+            brokers.LarkRequest(LEGACY_DOCUMENT_URL, "3365"),
+            digest("document-token"))
+        acquired = replace(
+            self.snapshot(
+                raw, "lark", "1.0.86",
+                native_adapters.LARK_NATIVE_SCHEMA_DIGEST),
+            selector_digest=digest(LEGACY_DOCUMENT_URL))
+
+        substituted = replace(
+            request, transaction_id="ingest-lark-legacy-substitution",
+            native_request=brokers.LarkRequest("OtherDoc456", "3365"))
+        with self.assertRaises(ingestion.IngestionError) as caught:
+            self.ingest(substituted, acquired)
+        self.assertEqual(caught.exception.code, "broker-evidence-mismatch")
+        self.assertEqual(
+            inspect_task(self.root).generation_id,
+            self.ingest_state.generation_id)
+
+        with mock.patch.object(
+                lark_selector, "parse_document_selector",
+                side_effect=AssertionError("new parser used for legacy selector")) as parser:
+            result, calls = self.ingest(request, acquired)
+        parser.assert_not_called()
+
+        self.assertEqual(calls, ["lark"])
+        self.assertEqual(result.status, "snapshotted")
+        self.assertEqual(
+            acquired.selector_digest, digest(LEGACY_DOCUMENT_URL))
 
     def test_lark_committed_selector_hides_token(self):
         raw = b'{"ok":true,"identity":"user","data":{"content":"safe"}}'

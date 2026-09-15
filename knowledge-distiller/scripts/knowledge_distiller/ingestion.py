@@ -241,6 +241,15 @@ def _snapshot_manifest(snapshot, payload, kind, context):
     return record, payload_dict, manifest
 
 
+def _validate_legacy_lark_selector(selector):
+    token = r"[A-Za-z0-9]+"
+    url = (r"https://[a-z0-9]+(?:-[a-z0-9]+)*\."
+           r"(?:larkoffice\.com|larksuite\.com|feishu\.cn)/docx/" + token)
+    if (type(selector) is not str or len(selector) > 4096
+            or re.fullmatch(r"(?:" + token + "|" + url + ")", selector) is None):
+        _fail("invalid-broker-request")
+
+
 def _validated_snapshot(snapshot, request, selector_key):
     snapshot = _closed(snapshot, brokers.BrokerSnapshot, "broker-response-invalid")
     owner = _closed(snapshot.owner, sources.OwnerBinding, "broker-response-invalid")
@@ -266,11 +275,6 @@ def _validated_snapshot(snapshot, request, selector_key):
         _fail("broker-evidence-mismatch")
     if request.source_kind == "lark":
         native_request = request.native_request
-        try:
-            parsed = lark_selector.parse_document_selector(
-                native_request.selector)
-        except (TypeError, ValueError, RecursionError):
-            _fail("invalid-broker-request")
         revision = native_request.revision
         if (type(revision) is not str or len(revision) > 20
                 or re.fullmatch(r"(?:0|[1-9][0-9]*)", revision) is None):
@@ -278,10 +282,18 @@ def _validated_snapshot(snapshot, request, selector_key):
         committed_selector = (type(context.selector) is str and re.fullmatch(
             r"sha256:[0-9a-f]{64}", context.selector) is not None)
         if committed_selector:
+            try:
+                parsed = lark_selector.parse_document_selector(
+                    native_request.selector)
+            except lark_selector.SelectorError:
+                _fail("invalid-broker-request")
             selector_matches = hmac.compare_digest(
                 parsed.commitment, context.selector)
             expected_selector_digest = context.selector
         else:
+            # Deliberately duplicated from the broker: ingestion independently
+            # revalidates data crossing its trust boundary.
+            _validate_legacy_lark_selector(native_request.selector)
             selector_matches = native_request.selector == context.selector
             expected_selector_digest = _digest(context.selector)
         if (not selector_matches

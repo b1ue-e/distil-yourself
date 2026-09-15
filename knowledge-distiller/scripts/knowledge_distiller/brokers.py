@@ -185,20 +185,32 @@ def _snapshot(raw: bytes, context, evidence: NativeEvidence,
                           len(raw), evidence)
 
 
-def _lark_selector_binding(selector, authorized_selector):
-    try:
-        parsed = lark_selector.parse_document_selector(selector)
-    except lark_selector.SelectorError:
+def _legacy_lark_document_token(selector):
+    token = r"[A-Za-z0-9]+"
+    url = (r"https://[a-z0-9]+(?:-[a-z0-9]+)*\."
+           r"(?:larkoffice\.com|larksuite\.com|feishu\.cn)/docx/" + token)
+    if (type(selector) is not str or len(selector) > 4096
+            or re.fullmatch(r"(?:" + token + "|" + url + ")", selector) is None):
         raise BrokerError("invalid-selector")
+    return selector.rsplit("/", 1)[-1]
+
+
+def _lark_selector_binding(selector, authorized_selector):
     committed = (type(authorized_selector) is str and re.fullmatch(
         r"sha256:[0-9a-f]{64}", authorized_selector) is not None)
     if committed:
+        try:
+            parsed = lark_selector.parse_document_selector(selector)
+        except lark_selector.SelectorError:
+            raise BrokerError("invalid-selector") from None
         matches = hmac.compare_digest(parsed.commitment, authorized_selector)
         selector_digest = authorized_selector
+        document_token = parsed.token
     else:
+        document_token = _legacy_lark_document_token(selector)
         matches = selector == authorized_selector
         selector_digest = _digest(authorized_selector.encode("utf-8"))
-    return parsed.token, matches, selector_digest
+    return document_token, matches, selector_digest
 
 
 def _lark_request(request, context):

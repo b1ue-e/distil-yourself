@@ -25,13 +25,15 @@ except ModuleNotFoundError:
 TOKEN = "doxcn1234567890AbCdEfGhIjKl"
 OTHER_TOKEN = "doxcn1234567890AbCdEfGhIjKm"
 DOCUMENT_URL = "https://example.larkoffice.com/docx/" + TOKEN
+LEGACY_TOKEN = "DocABC123"
+LEGACY_DOCUMENT_URL = "https://example.larkoffice.com/docx/" + LEGACY_TOKEN
 
 
 class BrokerTest(unittest.TestCase):
     def setUp(self):
         self.assertIsNotNone(brokers, "broker policy module is missing")
         self.context = auth.AuthorizationContext(
-            "task-1", "owner-1", "tenant-1", DOCUMENT_URL,
+            "task-1", "owner-1", "tenant-1", LEGACY_DOCUMENT_URL,
             "distill", "42", None, 1500, True, ("owner-1", "authority-1"), "collaborator-1")
         self.request = brokers.LarkRequest(self.context.selector, "42")
         self.credentials = brokers.CredentialBinding(
@@ -76,16 +78,24 @@ class BrokerTest(unittest.TestCase):
         self.assertEqual(error.args, (error.code,))
         for diagnostic in (str(error), repr(error.args), repr(vars(error))):
             self.assertLess(len(diagnostic), 160)
-            for secret in ("PRIVATE", "SECRET-CREDENTIAL", "example.larkoffice.com", TOKEN):
+            for secret in (
+                    "PRIVATE", "SECRET-CREDENTIAL", "example.larkoffice.com",
+                    TOKEN, LEGACY_TOKEN):
                 self.assertNotIn(secret, diagnostic)
 
-    def test_lark_exact_argv_minimal_env_limits_and_immutable_envelope(self):
-        with mock.patch.dict(os.environ, {"AWS_SECRET_ACCESS_KEY": "AMBIENT", "HOME": "PRIVATE"}):
+    def test_legacy_lark_url_uses_explicit_secret_and_old_selector_digest(self):
+        with mock.patch.dict(
+                os.environ,
+                {"AWS_SECRET_ACCESS_KEY": "AMBIENT", "HOME": "PRIVATE"}), \
+             mock.patch.object(
+                 lark_selector, "parse_document_selector",
+                 side_effect=AssertionError("new parser used for legacy selector")) as parser:
             result = self.fetch()
+        parser.assert_not_called()
         args, kwargs = self.runner.call_args
         self.assertEqual(args, ((
             "lark-cli", "api", "GET",
-            "/open-apis/docx/v1/documents/" + TOKEN + "/raw_content",
+            "/open-apis/docx/v1/documents/" + LEGACY_TOKEN + "/raw_content",
             "--as", "user"),))
         self.assertEqual(kwargs, {"env": {"LARK_TEST_USER_TOKEN": "SECRET-CREDENTIAL"},
                                   "shell": False, "timeout": 30, "max_bytes": brokers.MAX_GRAPH_BYTES,
@@ -108,15 +118,30 @@ class BrokerTest(unittest.TestCase):
         with self.assertRaises(FrozenInstanceError):
             result.evidence.product_version = "changed"
 
-    def test_normalized_token_allowed_without_url_rewriting(self):
-        context = replace(self.context, selector=TOKEN)
-        self.response = replace(self.response, selector_digest=digest(TOKEN.encode()))
+    def test_legacy_lark_bare_token_uses_explicit_secret_without_url_rewriting(self):
+        context = replace(self.context, selector=LEGACY_TOKEN)
+        self.response = replace(
+            self.response, selector_digest=digest(LEGACY_TOKEN.encode()))
         self.runner.return_value = self.response
-        self.fetch(request=brokers.LarkRequest(TOKEN, "42"), context=context,
-                   records=self.records(context))
+        with mock.patch.object(
+                lark_selector, "parse_document_selector",
+                side_effect=AssertionError("new parser used for legacy selector")) as parser:
+            result = self.fetch(
+                request=brokers.LarkRequest(LEGACY_TOKEN, "42"),
+                context=context, records=self.records(context))
+        parser.assert_not_called()
         self.assertEqual(
             self.runner.call_args.args[0][3],
-            "/open-apis/docx/v1/documents/" + TOKEN + "/raw_content")
+            "/open-apis/docx/v1/documents/" + LEGACY_TOKEN + "/raw_content")
+        self.assertEqual(result.selector_digest, digest(LEGACY_TOKEN.encode()))
+
+    def test_legacy_lark_rejects_valid_selector_substitution_before_io(self):
+        self.reject(
+            lambda: self.fetch(
+                request=brokers.LarkRequest("OtherDoc456", "42")),
+            "authorization-context-mismatch")
+        self.resolver.assert_not_called()
+        self.runner.assert_not_called()
 
     def test_lark_selector_commitment_and_ambient_user_are_bound(self):
         committed = lark_selector.parse_document_selector(TOKEN)
