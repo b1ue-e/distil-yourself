@@ -2,7 +2,7 @@
 
 Distil Yourself is a privacy-conscious, resumable Skill Factory for turning a person's documents, agent sessions, and explicit judgments into small, behaviorally testable agent skills.
 
-The approved design now has a runnable local core: guarded workflow checkpoints, authorization validation, dependency-injected Lark and Codex ingestion, one narrow owner-only standalone local Codex path, a strict evidence/claim model, deterministic capability scoring, one-question selection, explicit adjudication, and a non-installing domain-skill compiler.
+The approved design now has a runnable local core: guarded workflow checkpoints, authorization validation, dependency-injected Lark and Codex ingestion, one narrow owner-only standalone local Codex path, a synthetic-only standalone Lark command boundary, a strict evidence/claim model, deterministic capability scoring, one-question selection, explicit adjudication, and a non-installing domain-skill compiler.
 
 ## Design
 
@@ -88,6 +88,14 @@ python3 knowledge-distiller/scripts/kd.py ingest-codex-session \
 
 The request schema is `knowledge-distiller.local-codex-ingestion-request/v1`. This command is limited to the exact owner-only local boundary documented in [the workflow](knowledge-distiller/references/workflow.md) and [authorization reference](knowledge-distiller/references/authorization.md); it does not discover sessions, create a key, extract capabilities, evaluate, export, install, or publish.
 
+The standalone Lark entry point is present for the verified synthetic milestone:
+
+```bash
+python3 knowledge-distiller/scripts/kd.py ingest-lark-document TASK_PATH REQUEST.json --redaction-key-file KEY --allow-live-read
+```
+
+Its checked-in profile is `synthetic-only`, so a production invocation always returns `lark-live-disabled` before resolving `lark-cli 1.0.86` or making a network request. `--allow-live-read` expresses explicit intent but does not authorize a real Lark read. The command accepts only one exact owner-controlled Docx selector; Wiki URLs are unsupported. The closed request, `openId == owner_id` proof, observational consistency limit, privacy behavior, and remaining live gates are specified in [the workflow](knowledge-distiller/references/workflow.md), [authorization reference](knowledge-distiller/references/authorization.md), and [adapter compatibility gate](knowledge-distiller/references/adapter-compatibility.md).
+
 The following lines document the embedded API boundary syntax only. They are not directly executable for real ingestion without a production host runtime:
 
 ```bash
@@ -111,7 +119,7 @@ This milestone does not implement automatic discovery, a production Lark runtime
 
 ## Repository status
 
-- Design: approved
-- Implementation: deterministic dual-source evidence-to-private-draft core
+- Design: implemented (synthetic-only) for the standalone Lark runtime
+- Implementation: deterministic dual-source evidence-to-private-draft core plus production-disabled synthetic Lark boundary
 - CI and release process: not defined
 - License: not yet selected

@@ -18,6 +18,7 @@ WORKFLOW_FILE = SKILL_DIR / "references" / "workflow.md"
 AUTHORIZATION_FILE = SKILL_DIR / "references" / "authorization.md"
 ARTIFACT_POLICY_FILE = SKILL_DIR / "references" / "artifact-policy.md"
 KNOWLEDGE_PACKET_FILE = SKILL_DIR / "references" / "knowledge-packet.md"
+STATUS_FILE = ROOT / "docs" / "status" / "2026-09-05-implementation-status.md"
 sys.path.insert(0, str(SKILL_DIR / "scripts"))
 
 from knowledge_distiller import knowledge  # noqa: E402
@@ -624,6 +625,47 @@ class SkillContractTest(unittest.TestCase):
             "publishes the distilled skill",
         ):
             self.assertNotIn(overclaim.lower(), normalized)
+
+    def test_public_guidance_defines_the_synthetic_lark_runtime_boundary(self) -> None:
+        texts = {
+            path.name: path.read_text(encoding="utf-8")
+            for path in (
+                SKILL_FILE,
+                WORKFLOW_FILE,
+                AUTHORIZATION_FILE,
+                ADAPTER_COMPATIBILITY_FILE,
+                README_FILE,
+            )
+        }
+        combined = "\n".join(texts.values())
+        for requirement in (
+            "ingest-lark-document",
+            "--allow-live-read",
+            "synthetic-only",
+            "owner_id",
+            "openId",
+            "observational",
+            "lark-cli 1.0.86",
+            "Wiki URLs are unsupported",
+            "does not authorize a real Lark read",
+        ):
+            self.assertIn(requirement, combined)
+
+        command = (
+            "python3 knowledge-distiller/scripts/kd.py ingest-lark-document "
+            "TASK_PATH REQUEST.json --redaction-key-file KEY --allow-live-read"
+        )
+        self.assertIn(command, texts["README.md"])
+        self.assertIn(command, texts["workflow.md"])
+
+        status = STATUS_FILE.read_text(encoding="utf-8")
+        self.assertIn("synthetic Lark runtime milestone", status)
+        for remaining_gate in (
+            "endpoint-integrity evidence",
+            "accepted consistency mode",
+            "one explicitly approved exact-document probe",
+        ):
+            self.assertIn(remaining_gate, status)
 
     def test_core_guidance_defines_authority_provenance_and_question_boundaries(self) -> None:
         combined = " ".join((

@@ -18,7 +18,7 @@ Resume is an operation on a suspended state, not a fourth mode. It revalidates i
 
 The engine also represents `revision-review`, `suspended`, `suspended-exhausted`, `auth-stale`, `done`, `done-approved`, `done-partial`, `cancelled`, and `failed-permanent`.
 
-The implementation provides transition validation, local durable task-state persistence, dependency-injected Lark and Codex ingestion, one narrow standalone local Codex runtime, strict knowledge validation, explicit claim adjudication, and private draft compilation. It has no general production source runtime and no export side effects. A successful transition means only that the requested phase change is legal under supplied typed facts and was checkpointed locally.
+The implementation provides transition validation, local durable task-state persistence, dependency-injected Lark and Codex ingestion, one narrow standalone local Codex runtime, one production-disabled synthetic Lark command boundary, strict knowledge validation, explicit claim adjudication, and private draft compilation. It has no general production source runtime and no export side effects. A successful transition means only that the requested phase change is legal under supplied typed facts and was checkpointed locally.
 
 ## Supported evidence-to-draft path
 
@@ -29,6 +29,44 @@ The implementation provides transition validation, local durable task-state pers
 5. Give `compile-capability` the exact adjudicated packet bytes and the new generation ID. It revalidates persisted provenance and recorded grant digest/time bounds, produces a closed two-file bundle, invokes the artifact validator, and atomically stores the exact bytes and manifest. Current revocation and issuer authentication remain the trusted broker's responsibility.
 
 Compilation stops at `evaluate`; sealed evaluation is unavailable. It does not install or export the draft.
+
+## Standalone synthetic Lark ingestion
+
+From the repository root, the canonical command is:
+
+```bash
+python3 knowledge-distiller/scripts/kd.py ingest-lark-document TASK_PATH REQUEST.json --redaction-key-file KEY --allow-live-read
+```
+
+`--allow-live-read` records explicit intent for this invocation. The checked-in profile is `synthetic-only`, so every production invocation returns the code-only error `lark-live-disabled` before resolving or running an executable and before network access. The flag does not authorize a real Lark read. Tests can exercise the complete runtime only through a private synthetic gate that is unavailable to callers.
+
+`REQUEST.json` is a closed JSON object with exactly these five fields; duplicate, unknown, or missing fields are rejected:
+
+| Field | Contract |
+| --- | --- |
+| `schema_version` | Exactly `knowledge-distiller.local-lark-ingestion-request/v1` |
+| `transaction_id` | `[A-Za-z0-9][A-Za-z0-9._-]{0,127}` |
+| `expected_generation_id` | `[A-Za-z0-9][A-Za-z0-9._-]{0,127}` and equal to the current task generation |
+| `document_selector` | One exact Docx token or canonical Docx URL as defined below |
+| `derived_processing_until` | Built-in integer Unix time strictly later than runtime time and no more than 90 days later; booleans and values outside `0..2^63-1` are rejected |
+
+A synthetic, structurally valid example is:
+
+```json
+{
+  "schema_version": "knowledge-distiller.local-lark-ingestion-request/v1",
+  "transaction_id": "ingest-lark-1",
+  "expected_generation_id": "g-current",
+  "document_selector": "doxcn1234567890AbCdEfGhIjKl",
+  "derived_processing_until": 4102444800
+}
+```
+
+The displayed token is a test-only synthetic value, not a real document locator. A selector is either an exact 27-character ASCII alphanumeric token or a literal lower-case `https` URL of the form `https://tenant.{larkoffice.com|larksuite.com|feishu.cn}/docx/TOKEN`. Each DNS label is 1–63 lower-case ASCII characters with no edge hyphen, the full host is at most 253 characters, and at least one tenant label is required. Wiki URLs are unsupported. Query, fragment, explicit port, userinfo, redirect, shortcut, percent encoding, trailing slash, non-Docx path, Unicode, and case-normalized equivalents are rejected; the URL is parsed locally and never followed.
+
+After task-slot, key, deadline, and live-profile gates, the designed owner-only observational protocol is: verify `lark-cli auth status --json --verify`; observe exact token, Docx type, revision, and Drive `owner_id`; require the verified user `openId` to equal `owner_id`; acquire the task writer lease; reverify the same `openId`; read raw content; observe the same typed token/revision/owner tuple again; then normalize, redact, and atomically commit. Equality of the before/after `LarkObservation` proves only that no change was observed across the raw read. It is not an atomic or cryptographic snapshot, does not bind returned bytes to a revision, and does not prove replica consistency or continued freshness.
+
+The raw-content adapter still emits one unresolved, claim-ineligible synthetic block because this endpoint has no native block graph or per-block author. Only opaque selector/principal/account digests and the existing private authorization, evidence, and provenance records may persist; raw selector tokens, `openId`, `owner_id`, titles, content, redaction keys, and upstream diagnostics must not appear in public output, journals, or control records. See [authorization.md](authorization.md) for the owner evidence and [adapter-compatibility.md](adapter-compatibility.md) for the pinned profile and transport limits.
 
 ## Standalone local Codex ingestion
 
@@ -43,7 +81,7 @@ python3 knowledge-distiller/scripts/kd.py ingest-codex-session \
 
 The private request uses `knowledge-distiller.local-codex-ingestion-request/v1` and selects one explicit session file and exact byte-0 prefix. Only `Codex / 1.0.0 / 0.153.0 / rollout-jsonl-v1` is supported. The runtime derives identity from the effective UID; the opened source must have the same UID. The key must be a stable, single-link regular file with exact `0600` mode and contain 32–64 raw bytes. Key generation and lifecycle are outside this milestone.
 
-The request is intentionally closed: the caller never supplies UID, owner, issuer, grant, attestation, adapter version, or native schema. See [authorization.md](authorization.md) for the read decision and private binding semantics. Discovery, sibling reads, arbitrary versions, Lark standalone access, automatic extraction, evaluation, export, installation, and publication are unavailable.
+The request is intentionally closed: the caller never supplies UID, owner, issuer, grant, attestation, adapter version, or native schema. See [authorization.md](authorization.md) for the read decision and private binding semantics. Discovery, sibling reads, arbitrary versions, Lark standalone access, automatic extraction, evaluation, export, installation, and publication are unavailable. The separate synthetic Lark command remains production-disabled.
 
 The trusted host uses these exact argument shapes from the skill directory:
 

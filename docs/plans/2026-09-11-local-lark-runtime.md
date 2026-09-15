@@ -831,7 +831,7 @@ git commit -m "feat: expose fail-closed Lark ingestion CLI"
 - Modify: `docs/status/2026-09-05-implementation-status.md`
 - Modify: `docs/plans/2026-09-11-local-lark-runtime.md`
 
-- [ ] **Step 1: Write failing documentation-contract tests**
+- [x] **Step 1: Write failing documentation-contract tests**
 
 Require the skill and workflow references to state all of these exact facts:
 
@@ -851,7 +851,7 @@ required = (
 
 Also require the status document to name the completed synthetic milestone and the three remaining live gates: endpoint-integrity evidence, accepted consistency mode, and one explicitly approved exact-document probe.
 
-- [ ] **Step 2: Run documentation tests red**
+- [x] **Step 2: Run documentation tests red**
 
 Run:
 
@@ -861,7 +861,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest tests.test_skill_contract -v
 
 Expected: FAIL because the public skill still says the production Lark runtime is unavailable without describing the new synthetic-only command boundary.
 
-- [ ] **Step 3: Update user-facing contracts without overstating readiness**
+- [x] **Step 3: Update user-facing contracts without overstating readiness**
 
 Document the exact command, request schema, owner-only authority, selector restrictions, observational sandwich, synthetic-only profile, error behavior, and prohibition on real reads. Keep automatic discovery, Wiki resolution, shared-document authority, live probe, profile activation, evaluation, export, installation, publication, and purge unavailable. Mark the design `implemented (synthetic-only)` only after code gates pass, mark Tasks 1–8 in this plan complete as they land, and add exact test/review results to the status file.
 

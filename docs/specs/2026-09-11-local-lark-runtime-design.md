@@ -2,7 +2,7 @@
 
 Date: 2026-09-11
 
-Status: approved for planning
+Status: implemented (synthetic-only)
 
 ## Objective
 
@@ -13,10 +13,10 @@ from the verified `lark-cli --as user` identity and the document's server-side
 owner metadata, then reuse the existing broker, adapter, redaction, provenance,
 and atomic-ingestion boundaries.
 
-This milestone establishes a synthetic, testable implementation first. It does
-not authorize reading a real cloud document. Live access remains forbidden
-until two facts are established for the pinned profile: endpoint integrity and
-an accepted raw-content-to-revision consistency contract.
+This milestone establishes a synthetic, testable implementation. It does not
+authorize reading a real cloud document. Live access remains forbidden until
+endpoint-integrity evidence, an accepted raw-content-to-revision consistency
+mode, and one separately approved exact-document probe are complete.
 
 ## Decision and alternatives
 
@@ -56,13 +56,13 @@ kd.py ingest-lark-document TASK_PATH PRIVATE_REQUEST.json \
 | Public output | Existing bounded `IngestionResult` and allowlisted error codes only |
 | Unsupported | Wiki URLs, search, folders, batches, related resources, comments, references, blocks, media, history, bot identity, collaborator authority, automatic auth, credential export, CLI update, or any write |
 
-`--allow-live-read` is mandatory for any production ingestion network call but
-is not sufficient by itself: the checked-in compatibility profile must also be
-`live-enabled`. The initial implementation profile is `synthetic-only`, so the
-production ingestion command fails before executable resolution, auth
-verification, or metadata access even when the flag is present. The separately
-designed compatibility-probe command is the only exception and requires its own
-`--allow-live-probe` consent flag; it cannot ingest or persist content.
+`--allow-live-read` is mandatory for any future production ingestion network
+call but is not sufficient by itself: the checked-in compatibility profile must
+also be `live-enabled`. The implemented profile is `synthetic-only`, so the
+production ingestion command fails with `lark-live-disabled` before executable
+resolution, auth verification, metadata access, or network activity even when
+the flag is present. The flag records intent; it does not authorize a real Lark
+read. No live probe command or profile-activation path is implemented.
 
 ## Private request contract
 
@@ -106,6 +106,9 @@ caller-provided revision are not accepted. Runtime time has no clock-skew
 tolerance; an invalid clock or overflow fails closed. Derived evidence remains
 subject to task state and the existing authorization policy even before the
 90-day upper bound.
+
+Wiki URLs are unsupported. Redirects, shortcuts, and Wiki-node-to-Docx
+resolution are not attempted by this runtime.
 
 ## Pinned compatibility profile
 
@@ -485,16 +488,18 @@ Live activation is a separate reviewed change with this sequence:
    explicit `--allow-live-read` flag. Absence of either the live profile or flag
    rejects before executable resolution, auth, metadata, or content access.
 
-The probe verifies binary identity, response envelopes, effective scope
+The future probe would verify binary identity, response envelopes, effective scope
 capabilities, owner/revision shapes, raw-content schema digest, and the
 observable sandwich. It cannot prove server-side consistency, and success
 authorizes neither later documents nor broader traversal. The probe command and
-live-profile activation are deferred; the synthetic milestone cannot perform a
-real Lark read.
+live-profile activation are unavailable; the synthetic milestone cannot perform
+a real Lark read. Actual CLI response compatibility therefore remains
+unconfirmed by the required approved exact-document probe.
 
 ## Deferred work
 
-- Resolve one explicit Wiki URL to one Docx object without traversing siblings.
+- Wiki resolution remains unavailable and outside this implemented runtime; any
+  future Wiki design requires a separate authority and selector contract.
 - Define authority for shared documents not owned by the active user.
 - Add reviewed compatibility tuples for later `lark-cli` versions.
 - Add explicit document discovery only after defining a separate consent and

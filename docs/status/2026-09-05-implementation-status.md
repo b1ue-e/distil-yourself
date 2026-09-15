@@ -1,18 +1,30 @@
 # Knowledge Distiller 实现状态
 
-更新时间：2026-09-10（Asia/Shanghai）
+更新时间：2026-09-15（Asia/Shanghai）
 
 ## 当前结论
 
-`knowledge-distiller` 已完成既有 adapter-contract 里程碑、core dual-source loop 的 Task 1-10，以及新的 standalone LOCAL CODEX runtime：一个显式选择、effective-UID-owned、exact byte-0 prefix 的 Codex session 可通过独立 CLI 进入既有 broker、adapter、redaction、provenance 与 atomic ingestion 事务。当前完成的是可执行、全合成/脱敏的核心纵向闭环加本地 Codex 单文件前缀 runtime；这不代表完整 v1。Lark standalone/production runtime 仍未实现，也未授权任何真实 Codex session read。
+`knowledge-distiller` 已完成既有 adapter-contract、core dual-source loop、standalone LOCAL CODEX runtime，以及 standalone synthetic Lark runtime milestone 的 Task 1–7 代码和 Task 8 用户契约。新 Lark 命令已贯通 closed request、canonical selector、synthetic control parsers、native-only bounded transport、owner/revision observational sandwich、既有 broker/adapter/redaction/provenance 与 atomic ingestion；但 checked-in profile 固定为 `synthetic-only`，所以生产调用即使带 `--allow-live-read` 也会以 `lark-live-disabled` 在 executable/network 之前停止。该里程碑没有读取真实 Lark 文档，也不代表完整 v1 或 real-read readiness。
 
-Standalone local Codex runtime 最终独立规格终审为 `SPEC PASS`，独立质量终审为 `READY`，Critical、Important、Minor 均无遗留。focused six-module 套件为 170/170，严格全量验证为 430/430；`compileall`、`git diff --check` 与仓库无 `__pycache__` 检查均通过。完整验证命令为：
+Task 8 的独立规格/安全与质量/可读性复审尚待 controller 完成；以下旧章节是历史里程碑记录，其当时测试数字和“后续工作”不得解读为当前能力边界。当前 authoritative boundary 以本节、[workflow](../../knowledge-distiller/references/workflow.md)、[authorization](../../knowledge-distiller/references/authorization.md) 和 [adapter compatibility](../../knowledge-distiller/references/adapter-compatibility.md) 为准。
+
+Live activation 尚缺且只缺以下三个独立 gate：
+
+1. endpoint-integrity evidence；
+2. accepted consistency mode；
+3. one explicitly approved exact-document probe。
+
+第三项必须由用户针对一个 exact document 另行明确批准；当前未执行。automatic discovery、Wiki resolution、shared-document authority、live probe、profile activation、evaluation、export、installation、publication 与 purge 仍不可用。
+
+上一 standalone local Codex milestone 的最终独立规格终审为 `SPEC PASS`，独立质量终审为 `READY`，Critical、Important、Minor 均无遗留。其 focused six-module 套件为 170/170，严格全量验证为 430/430；`compileall`、`git diff --check` 与仓库无 `__pycache__` 检查均通过。其完整验证命令为：
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python3 -W error::ResourceWarning -m unittest discover -s tests -v
 ```
 
-精确 tuple `lark / 1.0.0 / 1.0.86 / docx-v1-raw-content-v1` 为 `normalizer-supported`；`codex / 1.0.0 / 0.153.0 / rollout-jsonl-v1` 已进入 event-graph allowlist 并通过 conformance，并由 standalone LOCAL CODEX runtime 固定支持。Task 7 提供 dependency-injected trusted ingestion runtime 边界；当前新增的本地 Codex runtime 只覆盖一个显式 selector/prefix/UID 绑定，不做 discovery、不授权真实读取。真实 Lark standalone/production runtime、live revocation/issuer re-authentication、`current-user` 身份认证、parser sandbox、sealed evaluation、签名、导出、安装与发布均未实现；Claude Code 与 Trae session adapter 仍为 `blocked`。
+精确 tuple `lark / 1.0.0 / 1.0.86 / docx-v1-raw-content-v1` 为 `normalizer-supported`，并有全合成 standalone runtime；它没有通过 approved exact-document probe，不能声称 actual CLI response compatibility 或 real-read readiness。`codex / 1.0.0 / 0.153.0 / rollout-jsonl-v1` 已进入 event-graph allowlist，并由 standalone LOCAL CODEX runtime 固定支持。两条 standalone 路径都不做 automatic discovery；Claude Code 与 Trae session adapter 仍为 `blocked`。
+
+Task 8 文档契约按 TDD 完成：新增测试先因缺少 `ingest-lark-document` 入口事实而 RED，更新后 `test_skill_contract` 为 28/28 GREEN；Lark/runtime 相关 focused suite 为 207/207，严格 full suite 为 517/517。`compileall`、`git diff --check`、仓库无 `__pycache__`、指定真实 Lark URL/token/Open ID 扫描均通过。独立 review 结论由后续 controller 记录，本节不预先声称通过。
 
 ## 分支与提交
 
@@ -221,13 +233,13 @@ python3 knowledge-distiller/scripts/kd.py ingest-codex-session \
 
 显式精简结论：没有可删除的 production/test/doc redundancy。dedicated local request reader 是有命名职责的边界，尽管当前大小限制等于通用 request limit；authorization/broker/source I/O 的独立 trust-boundary revalidation 需要保留，不应合并。
 
-验收只使用 checked-in synthetic fixture 复制到临时文件；本 milestone 未读取任何真实 Codex session，也未调用 Lark。剩余工作包括 Lark standalone runtime、automatic extraction/mapping、evaluation、export、installation、publication。本 post-plan milestone range 未发生新的 push、merge、install、export、publish、real session read 或更大范围环境变更；此前按请求做过 progress push，但当前 origin 仍在 `1304572`，本地实现 commits 仍未 push。
+验收只使用 checked-in synthetic fixture 复制到临时文件；本 milestone 未读取任何真实 Codex session，也未调用 Lark。该历史时点的剩余工作曾包括 Lark standalone runtime；它后来已完成 synthetic-only 实现，但 live activation 仍受本页顶部三个 gate 阻断。automatic extraction/mapping、evaluation、export、installation、publication 仍未完成。本 post-plan milestone range 未发生新的 push、merge、install、export、publish、real session read 或更大范围环境变更；此前按请求做过 progress push，但当前 origin 仍在 `1304572`，本地实现 commits 仍未 push。
 
 ### 产品里程碑
 
 - Claude Code、Trae session adapters 的 content-authorized fixtures 与版本兼容性验证。
 - DiscoveryGrant、MetadataGrant、ContentGrant、AuthorityAttestation 的持久化与 broker binding。
-- Lark standalone/production runtime、Codex discovery/default broader wiring 与自动 extraction/mapping。
+- Lark live profile activation、Codex discovery/default broader wiring 与自动 extraction/mapping。
 - sealed evaluator、ApprovalSubject、VersionApproval。
 - export consent、purge、audit 与 stale-export repair。
 

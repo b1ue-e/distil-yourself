@@ -6,16 +6,19 @@ This matrix separates evidence that a product can expose history from evidence t
 Knowledge Distiller has a stable, versioned parse contract. Product capability is
 not adapter compatibility. One narrow Lark raw-content normalizer and one Codex
 rollout adapter are supported; dependency-injected ingestion can atomically retain
-both sources in one task, while production source runtimes remain unavailable.
+both sources in one task. A standalone synthetic Lark runtime is implemented, but
+its checked-in profile stops every production call before executable or network
+access; general production source runtimes remain unavailable.
 Supported native versions: Lark / 1.0.0 / 1.0.86 / docx-v1-raw-content-v1 (normalizer only); Codex / 1.0.0 / 0.153.0 / rollout-jsonl-v1.
 All other native tuples remain disabled until an exact version passes the required
 conformance fixtures.
 
-The Lark row includes one explicitly authorized current-document compatibility
-probe. CLI output flowed directly into a bounded in-memory probe; its closed
-transport envelope was decoded and only decoded content entered the deterministic
-redactor. Only bounded schema fields, counts, and digests were emitted, and no
-observed content or tenant locator was retained in repository fixtures.
+Historical note: the earlier Lark normalizer row used one separately authorized
+current-document compatibility probe. Its bounded in-memory result established
+the raw normalizer fixture shape only. It did not establish the standalone
+runtime's current control-response contracts, endpoint integrity, owner protocol,
+or consistency mode, and it does not authorize a new probe or real read. The new
+runtime has not run an approved exact-document probe.
 
 The user separately authorized a read-only compatibility probe over all local
 Codex active and archived session roots. The probe observed 83 regular JSONL
@@ -30,7 +33,7 @@ point-in-time aggregate observations; live session roots may change.
 
 | Adapter | Readiness | Locally observed client | Product capability evidence | Stable parse-contract evidence |
 | --- | --- | --- | --- | --- |
-| Lark | `normalizer-supported` | `lark-cli 1.0.86` | Official Docx GET APIs expose current revision and raw text without fetching comment content. | Exact CLI envelope `ok/identity/data.content`, revision sandwich, synthetic fixture, and redaction/normalization tests pass for `docx-v1-raw-content-v1`; the production credential runtime remains blocked. |
+| Lark | `normalizer-supported` | `lark-cli 1.0.86` | Official Docx GET APIs expose current revision and raw text without fetching comment content. | Exact CLI envelope `ok/identity/data.content`, synthetic control schemas, observational sandwich, fake-executable fixture, and redaction/normalization tests pass for `docx-v1-raw-content-v1`; the checked-in production profile is `synthetic-only`. |
 | Codex | `supported` | `codex-cli 0.153.0` | Official source defines persisted rollout lines and session roots; the CLI can resume/fork sessions. | Exact local closed-prefix broker, `rollout-jsonl-v1` synthetic fixture, redaction/normalization tests, and one authorized aggregate closed-prefix replay pass; complete files containing unsupported projections fail closed. |
 | Claude Code | `blocked` | Executable unavailable through the local shim. | Official docs describe local JSONL transcripts and SDK session/message reads. | Public docs do not freeze every native JSONL record needed for the canonical causality contract. |
 | Trae | `blocked` | `traecli 0.202.3(internal edition)` | TraeCode CLI help exposes resume by UUID/thread name and fork by UUID. | Neither command establishes a read/export schema; Trae Agent trajectory JSON is a different product boundary. |
@@ -46,31 +49,62 @@ a production runtime, install a skill, or authorize any future read.
 ## Lark
 
 - **Official evidence:** [get document metadata](https://open.feishu.cn/document/server-docs/docs/docs/docx-v1/document/get) and [get raw content](https://open.feishu.cn/document/server-docs/docs/docs/docx-v1/document/raw_content) specify read-only Docx v1 GET endpoints and `docx:document:readonly`. Installed `lark-cli 1.0.86` exposes them through `api GET` with explicit `--as user`.
-- **Discovery/read interface:** resolve one explicitly selected Wiki node to one
-  `docx` object, then call only `GET /open-apis/docx/v1/documents/:id` and
-  `GET /open-apis/docx/v1/documents/:id/raw_content`. `docs +fetch` is excluded
-  because it may attach visible comment content. Links, embeds, attachments,
-  child nodes, comments, and history are never followed.
-- **Principal binding:** verified user identity, Wiki creator, and Wiki owner must
-  match before content access. The observed CLI envelope must contain the exact
-  literal `identity=user`; bot, auto, or fallback identities fail closed.
-- **Revision/append semantics:** read current `revision_id`, capture raw content,
-  then read `revision_id` again. Both must equal the approved canonical decimal
-  revision. The observed compatibility probe remained at revision `3365`.
+- **Discovery/read interface:** automatic discovery and Wiki resolution are
+  unavailable. Wiki URLs are unsupported. The closed request accepts only one
+  exact Docx token or canonical Docx URL and never traverses links, redirects,
+  shortcuts, embeds, attachments, child nodes, comments, blocks, media, or
+  history. `docs +fetch` is excluded because it may broaden the body-only read.
+- **Principal binding:** `lark-cli auth status --json --verify` must establish a
+  verified user `openId`; exact Drive batch metadata must return one `docx` row
+  whose `owner_id` equals that `openId`. Bot, automatic/fallback identity,
+  collaborator/editor authority, creator inference, and shared-document authority
+  fail closed. Raw IDs exist only for the in-memory comparison; opaque
+  domain-separated digests persist.
+- **Revision/append semantics:** one typed `LarkObservation` holds the exact token,
+  Docx revision, and owner. The runtime observes before, reverifies the same
+  `openId`, reads raw content, observes after, and requires exact typed equality.
+  This observational sandwich proves only that no owner or revision change was
+  observed. It is not an atomic or cryptographic snapshot, does not bind bytes to
+  the revision, and does not prove replica consistency or later freshness.
 - **Missing guarantee:** the raw-content endpoint exposes no native block graph or
   per-block author. The v1 normalizer therefore emits one synthetic block,
   records non-semantic formatting loss, and marks it unresolved and
-  claim-ineligible. The private ingestion transaction exists, but a production
-  authorization/credential runner remains unavailable.
-- **Fixtures required to unblock:** the exact normalizer tuple is covered by a
-  fully synthetic observed-shape fixture and expected canonical output. Rich
-  block schemas, other CLI versions/envelopes, comments, history, and every
-  implicit traversal remain blocked and require separate fixtures/approval.
-- **Failure behavior:** fail closed on an absent binary, non-user or ambiguous
-  identity, owner mismatch, revision change, unknown/missing/duplicate response
-  fields, malformed JSON, JSON-escape/redaction ordering violations, unvalidated
-  redaction output, resource limits, or any mutation path. Never retry under
-  another principal, broaden the selector, or echo content.
+  claim-ineligible. Actual CLI response compatibility and server-side consistency
+  remain unconfirmed because the required approved exact-document probe has not
+  run; this runtime is not real-read ready.
+- **Fixtures required to unblock:** the exact normalizer tuple, four closed control
+  schemas, and end-to-end runtime use only synthetic responses and an owner-owned
+  fake native executable. Live activation still requires endpoint-integrity
+  evidence, an accepted consistency mode, and one explicitly approved
+  exact-document probe. Rich block schemas, other CLI versions/envelopes,
+  comments, history, Wiki resolution, and implicit traversal remain blocked.
+- **Failure behavior:** the checked-in `synthetic-only` profile returns
+  `lark-live-disabled` before executable or network access even with
+  `--allow-live-read`. If a future reviewed profile is activated, absent or changed
+  binary, non-user/ambiguous identity, scope or owner mismatch, revision change,
+  unknown/missing/duplicate responses, malformed JSON, overflow, timeout,
+  redaction failure, or mutation path aborts the whole operation. There is no
+  retry, fallback principal, selector broadening, partial commit, or content echo.
+
+### Pinned synthetic runtime profile
+
+The one profile is `lark / adapter 1.0.0 / lark-cli 1.0.86 /
+docx-v1-raw-content-v1`. Its canonical record pins four closed synthetic control
+schema digests, the raw schema digest, exact read/metadata scope alternatives,
+30-second per-call timeout, 1 MiB control stdout, 64 MiB raw-envelope stdout,
+64 KiB stderr, `endpoint_integrity.status=unverified`,
+`consistency.mode=unaccepted`, and `status=synthetic-only`. Actual CLI response
+compatibility has not been confirmed by the required approved exact-document
+probe, so synthetic conformance must not be described as live readiness.
+
+The transport executes only a previously installed native binary. It may inspect
+the packaged Node launcher path solely to locate an existing `bin/lark-cli`; it
+never executes the wrapper or downloads/updates anything. It pins the native
+path and file fingerprint, uses fixed argv with `shell=False`, inherits only the
+minimal credential environment plus notifier suppression, rejects proxy/base-URL
+overrides, bounds stdout/stderr while streaming, kills and reaps on timeout or
+overflow, performs no retry, and never switches principal. See the workflow for
+the request and sequence; see authorization for the owner evidence.
 
 ## Codex
 

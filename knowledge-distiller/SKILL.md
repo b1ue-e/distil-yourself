@@ -7,9 +7,9 @@ description: Use when a user wants to distill their documents, agent sessions, d
 
 ## Overview
 
-Turn authorized personal evidence into one small, testable skill draft that preserves decision cues, constraints, exceptions, and recovery strategies.
+Turn authorized evidence into a testable skill draft preserving decision cues, constraints, exceptions, and recovery strategies.
 
-This implements checkpoints, authorization validation, dependency-injected dual-source ingestion, one owner-only standalone local Codex ingestion path, strict packets, one-question selection, adjudication, and a private-draft compiler. The canonical adapter contract and synthetic conformance harness exist. One exact Lark raw-content normalizer tuple and one exact Codex rollout adapter tuple are available.
+This implements checkpoints, authorization validation, dependency-injected dual-source ingestion, one owner-only standalone local Codex path, a fail-closed synthetic Lark command boundary, strict packets, one-question selection, adjudication, and a private-draft compiler. The adapter contract and synthetic conformance harness exist. One exact Lark raw-content normalizer tuple and one exact Codex rollout adapter tuple are available.
 
 Automatic discovery, the production Lark runtime, a general production Codex runtime beyond the standalone local path, Claude Code adapter, Trae adapter, sealed evaluation, approval signatures, export, installation, publication, and purge are unavailable. Never simulate one of these boundaries.
 
@@ -37,7 +37,7 @@ When a user provides a specific candidate canonical graph for normalization or v
 2. Resume with `task-inspect`; use `--recover` only for its reported recoverable cases, and stop on corruption.
 3. Automatic discovery is unavailable. Use only metadata and selectors the user explicitly grants or approves.
 4. Each private request covers one selector and pinned revision or closed session range, with active ContentGrant and AuthorityAttestation before every source read.
-5. Use `ingest-source` with an injected trusted runtime. Route `ingest-codex-session` through [references/workflow.md](references/workflow.md): explicit invocation is the read decision for one explicit session file and exact byte-0 prefix only. Ingest separately, then follow its mode route. Never print request content or redacted evidence.
+5. Use `ingest-source` with an injected trusted runtime. Route standalone `ingest-codex-session` and `ingest-lark-document` through [references/workflow.md](references/workflow.md). The checked-in Lark profile is `synthetic-only`; `--allow-live-read` expresses intent but does not authorize a real Lark read. Ingest separately, then follow the mode route. Never print request content or redacted evidence.
 6. Build the strict packet defined in [references/knowledge-packet.md](references/knowledge-packet.md). Preserve `source snapshot → native evidence → redacted span → ContentGrant → AuthorityAttestation` for every claim.
 7. Ask at most one critical question at a time. A lower-impact uncertainty does not block progress. Before adjudication, the current user must explicitly confirm the selected capability and every claim that will be published. Do not generate or infer user confirmation.
 8. Compile only the exact adjudicated packet bytes and confirmed publishable guidance. The compiler validates the fixed `SKILL.md` and `references/capability.md` bundle, then privately persists their manifest and compiled-rule provenance; it does not install or export.

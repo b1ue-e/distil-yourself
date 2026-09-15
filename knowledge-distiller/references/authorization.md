@@ -35,6 +35,16 @@ The trusted runtime derives the principal, tenant, owner, issuer, ContentGrant, 
 
 The redaction key is a stable single-link regular exact-`0600` file containing 32–64 raw bytes. The runtime reads it under the same effective-UID ownership policy. Key generation and lifecycle are outside this milestone; this command neither creates nor rotates the key.
 
+## Standalone Lark owner decision
+
+The Lark content rule is exact owner-only authority, not merely readable or shared access. The designed runtime obtains a verified user identity from `lark-cli auth status --json --verify`, then queries the selected Docx basic information and exactly one Drive metadata row. It accepts only `identity=user`, an exact `docx` token match, and `openId == owner_id`. Bot, automatic or fallback identity, collaborator/editor access, latest-editor or creator inference, shared-document authority, failed or ambiguous metadata, and an owner change are rejected.
+
+Raw `openId`, `owner_id`, and the Docx token exist only in memory for equality and sandwich checks. Persistence uses domain-separated opaque SHA-256 commitments for the selector, principal, and account; those digests do not reveal or replace the underlying authority decision. The derived ContentGrant and AuthorityAttestation bind one task generation, purpose, selector commitment, observed revision, five-minute read window, and derived-processing deadline. The fixed attestation basis is `verified-ownership`; it does not generalize to another document or later invocation.
+
+This Lark content owner-only rule is separate from local workspace owner-only permissions. The latter require the task workspace, private request, and redaction key to be controlled by the effective OS user; filesystem ownership cannot prove Lark document ownership, and Lark ownership cannot weaken local `0700`/`0600` rules.
+
+The public `--allow-live-read` flag expresses invocation intent but does not authorize a real Lark read. The checked-in `synthetic-only` profile returns `lark-live-disabled` before any Lark executable or network access. A later exact-document probe requires separate, explicit user approval and grants no authority to ingest, traverse, or reuse that document.
+
 ## Executable content authorization contract
 
 `authorization.py` validates materialized dictionaries into distinct frozen
