@@ -17,7 +17,7 @@ The proposed workflow:
 5. validate it with historical, boundary, trigger, and safety evaluations;
 6. require explicit approval before export or lifecycle updates.
 
-The [adapter compatibility matrix](knowledge-distiller/references/adapter-compatibility.md) and [canonical adapter contract](knowledge-distiller/references/adapter-contract.md) define the current boundary: the canonical adapter contract and synthetic conformance harness exist. One exact Lark raw-content normalizer tuple and one exact Codex rollout adapter tuple are available. Trusted, dependency-injected dual-source ingestion and one pinned local Codex runtime exist, but general production source runtimes do not.
+The [adapter compatibility matrix](knowledge-distiller/references/adapter-compatibility.md) defines the adapter tuple and normalizer compatibility boundary; the [canonical adapter contract](knowledge-distiller/references/adapter-contract.md) and synthetic conformance harness exist. Neither defines standalone Lark authorization, acquisition, or live readiness. One exact Lark raw-content normalizer tuple and one exact Codex rollout adapter tuple are available. Trusted, dependency-injected dual-source ingestion and one pinned local Codex runtime exist, but general production source runtimes do not.
 
 ## V1 boundaries
 
@@ -96,7 +96,7 @@ python3 knowledge-distiller/scripts/kd.py ingest-lark-document TASK_PATH REQUEST
 
 Its checked-in profile is `synthetic-only`, so a production invocation always returns `lark-live-disabled` before resolving `lark-cli 1.0.86` or making a network request. `--allow-live-read` expresses explicit intent but does not authorize a real Lark read. The command accepts only one exact owner-controlled Docx selector; Wiki URLs are unsupported.
 
-The [standalone Lark runtime design](docs/specs/2026-09-11-local-lark-runtime-design.md) is the canonical and single authority for this boundary. The [workflow](knowledge-distiller/references/workflow.md), [authorization reference](knowledge-distiller/references/authorization.md), and [adapter compatibility gate](knowledge-distiller/references/adapter-compatibility.md) are topic-specific operating references, not independent definitions of readiness.
+The [standalone Lark runtime design](docs/specs/2026-09-11-local-lark-runtime-design.md) is the canonical and single authority for this boundary. The [workflow](knowledge-distiller/references/workflow.md) is the command entry, the [authorization reference](knowledge-distiller/references/authorization.md) details owner evidence, and the [adapter compatibility gate](knowledge-distiller/references/adapter-compatibility.md) summarizes pinned tuple, schema, normalizer, and transport evidence; none independently defines readiness.
 
 The following lines document the embedded API boundary syntax only. They are not directly executable for real ingestion without a production host runtime:
 

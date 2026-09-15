@@ -16,7 +16,8 @@ and atomic-ingestion boundaries.
 This milestone establishes a synthetic, testable implementation. It does not
 authorize reading a real cloud document. Live access remains forbidden until
 endpoint-integrity evidence, an accepted raw-content-to-revision consistency
-mode, and one separately approved exact-document probe are complete.
+mode, and one explicitly approved exact-document probe—the future
+`standalone-runtime control-contract probe`—are complete.
 
 ## Decision and alternatives
 
@@ -491,7 +492,8 @@ Live activation is a separate reviewed change with this sequence:
    explicit `--allow-live-read` flag. Absence of either the live profile or flag
    rejects before executable resolution, auth, metadata, or content access.
 
-The future probe would verify binary identity, response envelopes, effective scope
+The future `standalone-runtime control-contract probe` would verify binary
+identity, response envelopes, effective scope
 capabilities, owner/revision shapes, raw-content schema digest, and the
 observable sandwich. It cannot prove server-side consistency, and success
 authorizes neither later documents nor broader traversal. The probe command and

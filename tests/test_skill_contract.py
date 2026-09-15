@@ -57,6 +57,9 @@ class SkillContractTest(unittest.TestCase):
         self.assertTrue(SKILL_FILE.is_file(), "knowledge-distiller/SKILL.md must exist")
         return SKILL_FILE.read_text(encoding="utf-8")
 
+    def normalized_text(self, path: Path) -> str:
+        return " ".join(path.read_text(encoding="utf-8").split())
+
     def test_frontmatter_is_discoverable(self) -> None:
         text = self.skill_text()
         match = re.match(r"\A---\n(.*?)\n---\n", text, re.DOTALL)
@@ -516,10 +519,8 @@ class SkillContractTest(unittest.TestCase):
         ):
             text = " ".join(path.read_text(encoding="utf-8").lower().split())
             with self.subTest(file=name):
-                self.assertIn(
-                    "contract and synthetic conformance harness exist",
-                    text,
-                )
+                self.assertIn("adapter contract", text)
+                self.assertIn("synthetic conformance harness exist", text)
                 self.assertIn(
                     "one exact lark raw-content normalizer tuple and one exact codex "
                     "rollout adapter tuple are available",
@@ -629,37 +630,14 @@ class SkillContractTest(unittest.TestCase):
         ):
             self.assertNotIn(overclaim.lower(), normalized)
 
-    def test_public_guidance_defines_the_synthetic_lark_runtime_boundary(self) -> None:
+    def test_lark_guidance_documents_command_request_selector_and_sandwich(self) -> None:
         command = (
             "python3 knowledge-distiller/scripts/kd.py ingest-lark-document "
             "TASK_PATH REQUEST.json --redaction-key-file KEY --allow-live-read"
         )
-        design_link = "docs/specs/2026-09-11-local-lark-runtime-design.md"
-        files = {
-            "README.md": README_FILE,
-            "SKILL.md": SKILL_FILE,
-            "workflow.md": WORKFLOW_FILE,
-            "authorization.md": AUTHORIZATION_FILE,
-            "adapter-compatibility.md": ADAPTER_COMPATIBILITY_FILE,
-            "status.md": STATUS_FILE,
-            "design.md": LARK_RUNTIME_DESIGN_FILE,
-        }
-        normalized = {
-            name: " ".join(path.read_text(encoding="utf-8").split())
-            for name, path in files.items()
-        }
-
-        for name, link in (
-            ("README.md", design_link),
-            ("SKILL.md", "../" + design_link),
-        ):
-            with self.subTest(file=name, contract="single-authority"):
-                self.assertIn(link, normalized[name])
-                self.assertIn("canonical and single authority", normalized[name])
-                self.assertIn("synthetic-only", normalized[name])
-                self.assertIn("does not authorize a real Lark read", normalized[name])
-
-        workflow = normalized["workflow.md"]
+        readme = self.normalized_text(README_FILE)
+        workflow = self.normalized_text(WORKFLOW_FILE)
+        self.assertIn(command, readme)
         self.assertIn(command, workflow)
         self.assertIn("exactly these five fields", workflow)
         for field in (
@@ -677,7 +655,22 @@ class SkillContractTest(unittest.TestCase):
         ):
             self.assertIn(requirement, workflow)
 
-        authorization = normalized["authorization.md"]
+    def test_lark_guidance_routes_authority_profile_and_live_gates(self) -> None:
+        design_link = "docs/specs/2026-09-11-local-lark-runtime-design.md"
+        readme = self.normalized_text(README_FILE)
+        skill = self.normalized_text(SKILL_FILE)
+        for text, link in ((readme, design_link), (skill, "../" + design_link)):
+            self.assertIn(link, text)
+            self.assertIn("canonical and single authority", text)
+            self.assertIn("synthetic-only", text)
+            self.assertIn("does not authorize a real Lark read", text)
+        self.assertIn("adapter tuple and normalizer compatibility boundary", readme)
+        self.assertIn(
+            "adapter compatibility questions about tuple and normalizer evidence",
+            skill,
+        )
+
+        authorization = self.normalized_text(AUTHORIZATION_FILE)
         for requirement in (
             "openId == owner_id",
             "only in memory",
@@ -686,7 +679,11 @@ class SkillContractTest(unittest.TestCase):
         ):
             self.assertIn(requirement, authorization)
 
-        adapter = normalized["adapter-compatibility.md"]
+        adapter = self.normalized_text(ADAPTER_COMPATIBILITY_FILE)
+        self.assertIn(
+            "../../docs/specs/2026-09-11-local-lark-runtime-design.md",
+            adapter,
+        )
         for requirement in (
             "lark / adapter 1.0.0 / lark-cli 1.0.86 / docx-v1-raw-content-v1",
             "observational sandwich",
@@ -697,21 +694,26 @@ class SkillContractTest(unittest.TestCase):
         ):
             self.assertIn(requirement, adapter)
 
-        status = normalized["status.md"]
+    def test_lark_status_and_design_distinguish_milestone_and_probes(self) -> None:
+        status = self.normalized_text(STATUS_FILE)
         for requirement in (
             "synthetic Lark runtime milestone",
             "endpoint-integrity evidence",
             "accepted consistency mode",
             "one explicitly approved exact-document probe",
             "feature branch: `feat/implement_knowledge_distiller`",
-            "work remains local and has not been pushed",
+            "historical normalizer-only probe",
+            "standalone-runtime control-contract probe",
+            "Remote synchronization is outside this milestone",
         ):
             self.assertIn(requirement, status)
-        self.assertNotRegex(status, r"\bahead\s+\d+\b")
-        for stale_value in ("origin still at", "1304572", "a3be2f5"):
+        for stale_value in (
+            "work remains local", "has not been pushed", "origin", "ahead",
+            "1304572", "a3be2f5",
+        ):
             self.assertNotIn(stale_value, status)
 
-        design = normalized["design.md"]
+        design = self.normalized_text(LARK_RUNTIME_DESIGN_FILE)
         for requirement in (
             "Status: implemented (synthetic-only)",
             "knowledge-distiller.local-lark-ingestion-request/v1",
@@ -720,7 +722,8 @@ class SkillContractTest(unittest.TestCase):
             "does not authorize a real Lark read",
             "endpoint-integrity evidence",
             "accepted consistency mode",
-            "one separately approved exact-document probe",
+            "standalone-runtime control-contract probe",
+            "one explicitly approved exact-document probe",
         ):
             self.assertIn(requirement, design)
 

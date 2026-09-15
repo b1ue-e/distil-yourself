@@ -27,7 +27,7 @@ Do not trigger for ordinary summaries, generic questions, or skill authoring wit
 
 Read [references/workflow.md](references/workflow.md) before changing task phase. Read [references/authorization.md](references/authorization.md) before resolving or reading a source, [references/knowledge-packet.md](references/knowledge-packet.md) before creating claims or questions, and [references/artifact-policy.md](references/artifact-policy.md) before compiling a draft.
 
-For adapter compatibility questions, including readiness questions, read only [references/adapter-compatibility.md](references/adapter-compatibility.md).
+For adapter compatibility questions about tuple and normalizer evidence, read only [references/adapter-compatibility.md](references/adapter-compatibility.md). It does not define standalone Lark readiness.
 
 When a user provides a specific candidate canonical graph for normalization or validation, proceed only if the owner ID and source snapshot ID are externally established. Then read [references/adapter-contract.md](references/adapter-contract.md) and run `validate-event-graph` below.
 
@@ -37,7 +37,7 @@ When a user provides a specific candidate canonical graph for normalization or v
 2. Resume with `task-inspect`; use `--recover` only for its reported recoverable cases, and stop on corruption.
 3. Automatic discovery is unavailable. Use only metadata and selectors the user explicitly grants or approves.
 4. Each private request covers one selector and pinned revision or closed session range, with active ContentGrant and AuthorityAttestation before every source read.
-5. Route `ingest-codex-session` through [workflow](references/workflow.md). For `ingest-lark-document`, the [standalone Lark runtime design](../docs/specs/2026-09-11-local-lark-runtime-design.md) is the canonical and single authority; workflow, authorization, and compatibility are operational references. The profile is `synthetic-only`; `--allow-live-read` does not authorize a real Lark read. Never print request content or evidence.
+5. Route `ingest-codex-session` through [workflow](references/workflow.md). For `ingest-lark-document`, the [Lark design](../docs/specs/2026-09-11-local-lark-runtime-design.md) is the canonical and single authority; other references are operational. Its profile is `synthetic-only`; `--allow-live-read` does not authorize a real Lark read. Never print requests or evidence.
 6. Build the strict packet defined in [references/knowledge-packet.md](references/knowledge-packet.md). Preserve `source snapshot → native evidence → redacted span → ContentGrant → AuthorityAttestation` for every claim.
 7. Ask at most one critical question at a time. A lower-impact uncertainty does not block progress. Before adjudication, the current user must explicitly confirm the selected capability and every claim that will be published. Do not generate or infer user confirmation.
 8. Compile only the exact adjudicated packet bytes and confirmed publishable guidance. The compiler validates the fixed `SKILL.md` and `references/capability.md` bundle, then privately persists their manifest and compiled-rule provenance; it does not install or export.

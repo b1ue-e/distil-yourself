@@ -14,7 +14,7 @@ Live activation 尚缺且只缺以下三个独立 gate：
 2. accepted consistency mode；
 3. one explicitly approved exact-document probe。
 
-第三项必须由用户针对一个 exact document 另行明确批准；当前未执行。automatic discovery、Wiki resolution、shared-document authority、live probe、profile activation、evaluation、export、installation、publication 与 purge 仍不可用。
+第三项指 `standalone-runtime control-contract probe`：必须由用户针对一个 exact document 另行明确批准，且当前未执行。早期 `historical normalizer-only probe` 只支持 normalizer fixture shape，不能满足此 gate。automatic discovery、Wiki resolution、shared-document authority、live probe、profile activation、evaluation、export、installation、publication 与 purge 仍不可用。
 
 上一 standalone local Codex milestone 的最终独立规格终审为 `SPEC PASS`，独立质量终审为 `READY`，Critical、Important、Minor 均无遗留。其 focused six-module 套件为 170/170，严格全量验证为 430/430；`compileall`、`git diff --check` 与仓库无 `__pycache__` 检查均通过。其完整验证命令为：
 
@@ -24,15 +24,14 @@ PYTHONDONTWRITEBYTECODE=1 python3 -W error::ResourceWarning -m unittest discover
 
 精确 tuple `lark / 1.0.0 / 1.0.86 / docx-v1-raw-content-v1` 为 `normalizer-supported`，并有全合成 standalone runtime；它没有通过 approved exact-document probe，不能声称 actual CLI response compatibility 或 real-read readiness。`codex / 1.0.0 / 0.153.0 / rollout-jsonl-v1` 已进入 event-graph allowlist，并由 standalone LOCAL CODEX runtime 固定支持。两条 standalone 路径都不做 automatic discovery；Claude Code 与 Trae session adapter 仍为 `blocked`。
 
-Task 8 文档契约按 TDD 完成：新增测试先因缺少 `ingest-lark-document` 入口事实而 RED，更新后 `test_skill_contract` 为 28/28 GREEN；Lark/runtime 相关 focused suite 为 207/207，严格 full suite 为 517/517。`compileall`、`git diff --check`、仓库无 `__pycache__`、指定真实 Lark URL/token/Open ID 扫描均通过。独立 review 结论由后续 controller 记录，本节不预先声称通过。
+Task 8 文档契约按 TDD 完成：初始测试因缺少 `ingest-lark-document` 入口事实而 RED；质量修复将 Lark contract 拆成 command/schema、authority/profile 和 status/design 三个职责测试，并先因含混 authority route 与 probe/status 表述而 RED。更新后 `test_skill_contract` 为 30/30 GREEN，Lark/runtime 相关 focused suite 为 209/209，严格 full suite 为 519/519。`compileall`、`git diff --check`、仓库无 `__pycache__`、指定真实 Lark URL/token/Open ID 扫描均通过。独立 review 结论由后续 controller 记录，本节不预先声称通过。
 
 ## 分支与本地里程碑
 
 - feature branch: `feat/implement_knowledge_distiller`
-- work remains local and has not been pushed；本文不记录会随下一提交失效的提交数量或远端 SHA
 - core dual-source loop Task 1–10 已完成规格与质量双审闭环
 - standalone LOCAL CODEX runtime 已完成；standalone Lark runtime 已完成 synthetic-only 实现
-- 本地 Lark milestone 未新增 push、merge、安装、导出或发布
+- Remote synchronization is outside this milestone；本 milestone 不执行 push、merge、安装、导出或发布
 
 已完成的本地提交：
 
@@ -179,7 +178,7 @@ Task 4 已完成：新增纯内存、无 I/O、资源有界且单次使用的 de
 
 私钥装甲识别经多轮对抗评审后收敛为单次 O(n) ASCII-token DFA：精确 allowlisted envelope 才脱敏成功，fenced malformed/token split/token interruption 均 fail closed。最终精简修复删除 `unicodedata`、interruption flags 和重复分支，净删除 28 行状态复杂度。独立规格复审为 `SPEC PASS`，独立质量复审为 `READY`，Critical、Important、Minor 均无遗留；质量 reviewer 的 192 组 separator-position 组合探针全部通过。Task 4 定向边界测试为 60/60，严格完整回归为 287/287，`compileall` 与 `git diff --check` 通过。主要实现与收口提交为 `039abf0`、`1aeff8f`、`9b9afcd`、`4040cc3`、`ba2a8b2`、`4e8afa4`、`e4b51bb`、`af20c22`。
 
-Task 5 已完成：在用户明确授权的单一 Wiki 当前页面范围内，验证 active user principal 与 Wiki creator/owner 一致，并固定 Docx revision `3365`。只使用 metadata GET 与 raw-content GET；未调用可能携带评论的 `docs +fetch`，也未遍历链接、嵌入、附件、子文档、评论或历史版本。真实正文只进入一次内存兼容性管道，没有显示、写入仓库或进入 fixture；仓库 fixture 为完全合成内容，只保留 observed schema shape、CLI version 和 revision 元数据。
+Historical normalizer-only probe（Task 5）已完成：在用户明确授权的单一 Wiki 当前页面范围内，验证 active user principal 与 Wiki creator/owner 一致，并固定 Docx revision `3365`。只使用 metadata GET 与 raw-content GET；未调用可能携带评论的 `docs +fetch`，也未遍历链接、嵌入、附件、子文档、评论或历史版本。真实正文只进入一次内存兼容性管道，没有显示、写入仓库或进入 fixture；仓库 fixture 为完全合成内容，只保留 observed schema shape、CLI version 和 revision 元数据。该历史 probe 不验证 standalone runtime control contracts，也不授权新的读取。
 
 Task 5 实现严格 envelope decoder，先解析 `ok/identity/data.content`，再只把 decoded content 交给 deterministic redactor，关闭 JSON `\u` escape 重建敏感内容的绕过。normalizer 仅接受认证后的 redaction result，绑定 owner、source snapshot、revision 与 digest-only native document locator，输出单一 unresolved/claim-ineligible block 和明确 formatting loss。typed `CanonicalDocument` 可直接进入 shared snapshot validator，并在任何 wire materialization 前执行与 wire payload 一致的 blocks/items 资源预检。
 
@@ -249,6 +248,6 @@ python3 knowledge-distiller/scripts/kd.py ingest-codex-session \
 - 仅按明确授权读取过指定 Wiki 页面的当前 Docx metadata/raw content，用于内存兼容性验证；未读取评论、链接目标、嵌入、附件、子文档或历史版本。
 - 真实 Lark 正文未显示、未写入仓库、未保存在测试 fixture；仓库内只有合成内容与 bounded schema 元数据。
 - 已按用户明确授权对本地 Codex active/archived session roots 做只读聚合兼容性 probe；没有输出或保留正文、路径、session ID，未读取 credentials/config/cache，也未修改原生文件。
-- 除上述单一已授权 Lark probe 与 Codex 聚合兼容性 probe 外，只使用官方资料、CLI `--help`/`--version` 和 synthetic fixtures。
-- 本地 Lark milestone 未新增 push、merge、skill 安装、导出、发布或外部写入。
+- 除上述 historical normalizer-only probe 与 Codex 聚合兼容性 probe 外，只使用官方资料、CLI `--help`/`--version` 和 synthetic fixtures；standalone-runtime control-contract probe 未执行。
+- Remote synchronization is outside this milestone；本 milestone 不执行 push、merge、skill 安装、导出、发布或外部写入。
 - 未进行更大范围的环境变更；观察到的 CLI 版本/skill notice 未触发升级或配置修改。

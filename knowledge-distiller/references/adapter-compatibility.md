@@ -13,12 +13,18 @@ Supported native versions: Lark / 1.0.0 / 1.0.86 / docx-v1-raw-content-v1 (norma
 All other native tuples remain disabled until an exact version passes the required
 conformance fixtures.
 
-Historical note: the earlier Lark normalizer row used one separately authorized
-current-document compatibility probe. Its bounded in-memory result established
+For standalone Lark runtime authorization, acquisition, and readiness, the
+[runtime design](../../docs/specs/2026-09-11-local-lark-runtime-design.md) is the
+canonical and single authority. This file summarizes implementation evidence for
+the pinned tuple, control schemas, normalizer, and transport only.
+
+Historical note: the `historical normalizer-only probe` used one separately
+authorized current document. Its bounded in-memory result established
 the raw normalizer fixture shape only. It did not establish the standalone
 runtime's current control-response contracts, endpoint integrity, owner protocol,
-or consistency mode, and it does not authorize a new probe or real read. The new
-runtime has not run an approved exact-document probe.
+or consistency mode, and it does not authorize a new probe or real read. The
+`standalone-runtime control-contract probe` has not run; it requires separate
+explicit approval for one exact document.
 
 The user separately authorized a read-only compatibility probe over all local
 Codex active and archived session roots. The probe observed 83 regular JSONL
