@@ -548,6 +548,35 @@ sys.stdout.buffer.write(output)
             })
             reader.assert_not_called()
 
+    def test_ingest_lark_document_rejects_abbreviated_options_before_read(self) -> None:
+        private = "SYNTHETIC_PRIVATE_REQUEST_PATH"
+        cases = (
+            (
+                "--redaction-key-fil", "key", "--allow-live-read",
+            ),
+            (
+                "--redaction-key-file", "key", "--allow-live-rea",
+            ),
+        )
+        for options in cases:
+            arguments = (
+                "ingest-lark-document", "task", private, *options,
+            )
+            with self.subTest(options=options), mock.patch.object(
+                    source_io, "read_source") as reader, mock.patch.object(
+                    kd_cli.sys, "stdout", io.StringIO()) as stdout, \
+                    mock.patch.object(
+                        kd_cli.sys, "stderr", io.StringIO()) as stderr:
+                code = kd_cli.main(arguments)
+
+            self.assertEqual(code, 2)
+            self.assertEqual(stdout.getvalue(), "")
+            self.assertEqual(json.loads(stderr.getvalue())["error"], {
+                "code": "invalid-input", "reason": "invalid-arguments",
+            })
+            self.assertNotIn(private, stderr.getvalue())
+            reader.assert_not_called()
+
     def test_ingest_lark_document_reads_bounded_request_and_delegates(self) -> None:
         result = ingestion.IngestionResult(
             status="snapshotted", source_kind="document",
