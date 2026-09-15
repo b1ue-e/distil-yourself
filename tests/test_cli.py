@@ -577,6 +577,24 @@ sys.stdout.buffer.write(output)
             self.assertNotIn(private, stderr.getvalue())
             reader.assert_not_called()
 
+    def test_existing_commands_keep_long_option_abbreviations(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            task = Path(directory).resolve() / "task"
+            create_task(task)
+            payload = kd_cli._run(("task-inspect", str(task), "--rec"))
+        self.assertTrue(payload["ok"])
+
+        manifest = {"synthetic": True}
+        with mock.patch.object(
+                kd_cli, "_validate_event_graph", return_value=manifest) as validate:
+            payload = kd_cli._run((
+                "validate-event-graph", "graph.json",
+                "--expected-owner", "owner-1",
+                "--expected-source-snapshot", "snapshot-1",
+            ))
+        validate.assert_called_once_with("graph.json", "owner-1", "snapshot-1")
+        self.assertEqual(payload, {"ok": True, "manifest": manifest})
+
     def test_ingest_lark_document_reads_bounded_request_and_delegates(self) -> None:
         result = ingestion.IngestionResult(
             status="snapshotted", source_kind="document",
@@ -630,11 +648,30 @@ sys.stdout.buffer.write(output)
             "ingest-lark-document", private + "-task", private + ".json",
             "--redaction-key-file", private + "-key", "--allow-live-read",
         )
+        expected_lark_codes = (
+            "invalid-lark-request",
+            "invalid-derived-deadline",
+            "local-identity-unavailable",
+            "unsafe-redaction-key",
+            "lark-live-disabled",
+            "lark-cli-incompatible",
+            "lark-identity-unverified",
+            "lark-missing-scope",
+            "lark-owner-mismatch",
+            "lark-document-unavailable",
+            "lark-document-unstable",
+            "lark-transport-unavailable",
+            "lark-runtime-failed",
+        )
+        self.assertEqual(
+            frozenset(expected_lark_codes),
+            lark_runtime.LarkRuntimeError.ALLOWED,
+        )
         failures = tuple(
             (lark_runtime.LarkRuntimeError(code), 2, {
                 "code": "invalid-input", "reason": code,
             })
-            for code in sorted(lark_runtime.LarkRuntimeError.ALLOWED)
+            for code in expected_lark_codes
         ) + ((
             ingestion.IngestionError(private), 3,
             {"code": "source-ingestion-rejected", "reason": "ingestion-failed"},
@@ -653,6 +690,75 @@ sys.stdout.buffer.write(output)
             self.assertEqual(code, expected_code)
             self.assertEqual(stdout.getvalue(), "")
             self.assertEqual(json.loads(stderr.getvalue())["error"], expected_error)
+            self.assertNotIn(private, stderr.getvalue())
+
+    def test_ingestion_error_output_revalidates_mutated_codes(self) -> None:
+        private = "SYNTHETIC_PRIVATE_MUTATED_ERROR"
+
+        class PrivateString(str):
+            pass
+
+        class BrokenLarkError(lark_runtime.LarkRuntimeError):
+            def __init__(self, code):
+                self._broken = False
+                super().__init__(code)
+                self._broken = True
+
+            def __getattribute__(self, name):
+                if name == "code" and object.__getattribute__(self, "_broken"):
+                    raise RuntimeError(private)
+                return super().__getattribute__(name)
+
+        class BrokenIngestionError(ingestion.IngestionError):
+            def __init__(self, code):
+                self._broken = False
+                super().__init__(code)
+                self._broken = True
+
+            def __getattribute__(self, name):
+                if name == "code" and object.__getattribute__(self, "_broken"):
+                    raise RuntimeError(private)
+                return super().__getattribute__(name)
+
+        mutated_lark = lark_runtime.LarkRuntimeError("lark-live-disabled")
+        object.__setattr__(mutated_lark, "code", private)
+        subclass_lark = lark_runtime.LarkRuntimeError("lark-live-disabled")
+        object.__setattr__(subclass_lark, "code", PrivateString("lark-live-disabled"))
+        mutated_ingestion = ingestion.IngestionError("authorization-revoked")
+        object.__setattr__(mutated_ingestion, "code", private)
+        subclass_ingestion = ingestion.IngestionError("authorization-revoked")
+        object.__setattr__(
+            subclass_ingestion, "code", PrivateString("authorization-revoked"))
+        cases = (
+            (mutated_lark, 2, "invalid-input", "invalid-lark-request"),
+            (subclass_lark, 2, "invalid-input", "invalid-lark-request"),
+            (BrokenLarkError("lark-live-disabled"), 2,
+             "invalid-input", "invalid-lark-request"),
+            (mutated_ingestion, 3, "source-ingestion-rejected", "ingestion-failed"),
+            (subclass_ingestion, 3, "source-ingestion-rejected", "ingestion-failed"),
+            (BrokenIngestionError("ingestion-invalid"), 3,
+             "source-ingestion-rejected", "ingestion-failed"),
+        )
+        arguments = (
+            "ingest-lark-document", "task", private + ".json",
+            "--redaction-key-file", "key", "--allow-live-read",
+        )
+        for failure, exit_code, error_code, reason in cases:
+            with self.subTest(kind=type(failure).__name__), mock.patch.object(
+                    source_io, "read_source", return_value=b"request"), \
+                    mock.patch.object(
+                        lark_runtime, "ingest_lark_document", side_effect=failure,
+                    ), mock.patch.object(
+                        kd_cli.sys, "stdout", io.StringIO()) as stdout, \
+                    mock.patch.object(
+                        kd_cli.sys, "stderr", io.StringIO()) as stderr:
+                code = kd_cli.main(arguments)
+
+            self.assertEqual(code, exit_code)
+            self.assertEqual(stdout.getvalue(), "")
+            self.assertEqual(json.loads(stderr.getvalue())["error"], {
+                "code": error_code, "reason": reason,
+            })
             self.assertNotIn(private, stderr.getvalue())
 
     def test_ingest_lark_document_maps_unsafe_request_files_to_exit_two(self) -> None:

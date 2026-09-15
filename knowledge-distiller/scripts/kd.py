@@ -48,10 +48,6 @@ class CliInputError(ValueError):
 
 
 class JsonArgumentParser(argparse.ArgumentParser):
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        kwargs.setdefault("allow_abbrev", False)
-        super().__init__(*args, **kwargs)
-
     def error(self, message: str) -> None:
         raise CliInputError("invalid-arguments")
 
@@ -61,6 +57,13 @@ def _emit(payload: Dict[str, Any], stream: Any) -> None:
         json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True),
         file=stream,
     )
+
+
+def _safe_error_code(error: Exception, error_type: Any, fallback: str) -> str:
+    try:
+        return error_type(error.code).code
+    except Exception:
+        return fallback
 
 
 def _parse_object(raw: str) -> Dict[str, Any]:
@@ -229,7 +232,8 @@ def _build_parser() -> JsonArgumentParser:
     ingest_codex.add_argument("request_path")
     ingest_codex.add_argument("--redaction-key-file", required=True)
 
-    ingest_lark = commands.add_parser("ingest-lark-document")
+    ingest_lark = commands.add_parser(
+        "ingest-lark-document", allow_abbrev=False)
     ingest_lark.add_argument("task_path")
     ingest_lark.add_argument("request_path")
     ingest_lark.add_argument("--redaction-key-file", required=True)
@@ -407,7 +411,10 @@ def main(arguments: Optional[Sequence[str]] = None, *, ingestion_runtime=None) -
     except lark_runtime.LarkRuntimeError as error:
         _emit(
             {"ok": False, "error": {
-                "code": "invalid-input", "reason": error.code}},
+                "code": "invalid-input",
+                "reason": _safe_error_code(
+                    error, lark_runtime.LarkRuntimeError,
+                    "invalid-lark-request")}},
             sys.stderr,
         )
         return 2
@@ -429,7 +436,9 @@ def main(arguments: Optional[Sequence[str]] = None, *, ingestion_runtime=None) -
     except ingestion.IngestionError as error:
         _emit(
             {"ok": False, "error": {
-                "code": "source-ingestion-rejected", "reason": error.code}},
+                "code": "source-ingestion-rejected",
+                "reason": _safe_error_code(
+                    error, ingestion.IngestionError, "ingestion-failed")}},
             sys.stderr,
         )
         return 3
