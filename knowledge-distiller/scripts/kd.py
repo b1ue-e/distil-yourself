@@ -17,7 +17,9 @@ from knowledge_distiller.adapters import (
     validate_validation_context,
 )
 from knowledge_distiller.artifacts import DraftValidationError, validate_draft
-from knowledge_distiller import compiler, ingestion, knowledge, local_runtime, source_io
+from knowledge_distiller import (
+    compiler, ingestion, knowledge, lark_runtime, local_runtime, source_io,
+)
 from knowledge_distiller.persistence import (
     TaskBusyError,
     TaskPersistenceError,
@@ -153,6 +155,14 @@ def _read_local_codex_request(path: str) -> bytes:
         raise CliInputError(error.code) from None
 
 
+def _read_local_lark_request(path: str) -> bytes:
+    try:
+        return source_io.read_source(
+            path, max_bytes=lark_runtime.MAX_LOCAL_REQUEST_BYTES)
+    except source_io.SourceIOError as error:
+        raise CliInputError(error.code) from None
+
+
 def _read_knowledge_packet(path: str) -> bytes:
     try:
         return source_io.read_source(path, max_bytes=knowledge.MAX_PACKET_BYTES)
@@ -214,6 +224,12 @@ def _build_parser() -> JsonArgumentParser:
     ingest_codex.add_argument("task_path")
     ingest_codex.add_argument("request_path")
     ingest_codex.add_argument("--redaction-key-file", required=True)
+
+    ingest_lark = commands.add_parser("ingest-lark-document")
+    ingest_lark.add_argument("task_path")
+    ingest_lark.add_argument("request_path")
+    ingest_lark.add_argument("--redaction-key-file", required=True)
+    ingest_lark.add_argument("--allow-live-read", action="store_true", required=True)
 
     validate_knowledge = commands.add_parser("validate-knowledge-packet")
     validate_knowledge.add_argument("packet_path")
@@ -280,6 +296,16 @@ def _run(arguments: Sequence[str], *, ingestion_runtime=None) -> Dict[str, Any]:
         raw = _read_local_codex_request(options.request_path)
         result = local_runtime.ingest_codex_session(
             Path(options.task_path), raw, options.redaction_key_file)
+        return {"ok": True, "ingestion": asdict(result)}
+
+    if options.command == "ingest-lark-document":
+        raw = _read_local_lark_request(options.request_path)
+        result = lark_runtime.ingest_lark_document(
+            Path(options.task_path),
+            raw,
+            options.redaction_key_file,
+            allow_live_read=options.allow_live_read,
+        )
         return {"ok": True, "ingestion": asdict(result)}
 
     if options.command == "validate-knowledge-packet":
@@ -368,6 +394,13 @@ def main(arguments: Optional[Sequence[str]] = None, *, ingestion_runtime=None) -
         )
         return 2
     except local_runtime.LocalRuntimeError as error:
+        _emit(
+            {"ok": False, "error": {
+                "code": "invalid-input", "reason": error.code}},
+            sys.stderr,
+        )
+        return 2
+    except lark_runtime.LarkRuntimeError as error:
         _emit(
             {"ok": False, "error": {
                 "code": "invalid-input", "reason": error.code}},

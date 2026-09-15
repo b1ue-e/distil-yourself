@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from dataclasses import asdict, replace
 from types import SimpleNamespace
 import unittest
 from pathlib import Path
@@ -19,7 +20,8 @@ sys.path.insert(0, str(ROOT / "knowledge-distiller" / "scripts"))
 
 import kd as kd_cli  # noqa: E402
 from knowledge_distiller import (  # noqa: E402
-    artifacts, adapters, compiler, ingestion, knowledge, local_runtime,
+    artifacts, adapters, compiler, ingestion, knowledge, lark_cli_transport,
+    lark_profile, lark_runtime, local_runtime,
 )
 from knowledge_distiller.journal import canonical_json  # noqa: E402
 from knowledge_distiller import source_io  # noqa: E402
@@ -30,6 +32,12 @@ from knowledge_distiller.state import Event, Phase, TransitionFacts  # noqa: E40
 
 
 class CliTest(unittest.TestCase):
+    LARK_TOKEN = "doxcn1234567890AbCdEfGhIjKl"
+    LARK_URL = "https://tenant.larkoffice.com/docx/" + LARK_TOKEN
+    LARK_OWNER = "ou_SYNTHETIC_OWNER"
+    LARK_TITLE = "SYNTHETIC_PRIVATE_TITLE"
+    LARK_RAW_TEXT = "password=SYNTHETIC_PRIVATE_RAW_TEXT"
+
     def knowledge_packet_bytes(self, *, questions=True):
         from tests.test_knowledge import packet
         value = packet()
@@ -408,6 +416,300 @@ class CliTest(unittest.TestCase):
             ):
                 self.assertNotIn(private, result.stdout)
                 self.assertNotIn(private, result.stderr)
+
+    def _prepare_lark_ingestion(self, private_root: Path):
+        task = private_root / "task"
+        create_task(task)
+        with TaskCoordinator(task) as coordinator:
+            coordinator.transition(
+                Event.START_DISTILL,
+                TransitionFacts(selected_capability=True),
+            )
+            granted = coordinator.transition(
+                Event.CONTENT_GRANTED,
+                TransitionFacts(content_grant=True, authority_valid=True),
+            )
+        key = b"K" * 32
+        key_path = private_root / "SYNTHETIC_PRIVATE_KEY_PATH"
+        key_path.write_bytes(key)
+        key_path.chmod(0o600)
+        request_path = private_root / "SYNTHETIC_PRIVATE_REQUEST_PATH.json"
+        request_path.write_bytes(canonical_json({
+            "schema_version": lark_runtime.REQUEST_SCHEMA,
+            "transaction_id": "cli-lark-ingestion",
+            "expected_generation_id": granted.generation_id,
+            "document_selector": self.LARK_URL,
+            "derived_processing_until": int(time.time()) + 3600,
+        }))
+        return task, key, key_path, request_path
+
+    def _write_lark_fake(self, private_root: Path) -> Path:
+        fixtures = ROOT / "tests/fixtures/lark_runtime/1.0.86"
+        document = json.loads(
+            (fixtures / "document-info.json").read_text(encoding="utf-8"))
+        metadata = json.loads(
+            (fixtures / "drive-metadata.json").read_text(encoding="utf-8"))
+        document["data"]["document"]["title"] = self.LARK_TITLE
+        metadata["data"]["metas"][0]["title"] = self.LARK_TITLE
+        responses = {
+            "auth": (fixtures / "auth-status.json").read_bytes(),
+            "document": canonical_json(document),
+            "metadata": canonical_json(metadata),
+            "raw": canonical_json({
+                "ok": True,
+                "identity": "user",
+                "data": {"content": self.LARK_RAW_TEXT},
+            }),
+        }
+        executable = private_root / "bin" / "lark-cli"
+        executable.parent.mkdir(mode=0o700)
+        executable.write_text(
+            f'''#!{sys.executable}
+import sys
+
+RESPONSES = {responses!r}
+args = tuple(sys.argv[1:])
+sys.stdin.buffer.read()
+if args == ("--version",):
+    output = b"lark-cli version 1.0.86\\n"
+elif args == ("auth", "status", "--json", "--verify"):
+    output = RESPONSES["auth"]
+elif args[:3] == ("api", "GET", "/open-apis/docx/v1/documents/{self.LARK_TOKEN}"):
+    output = RESPONSES["document"]
+elif args[:3] == ("drive", "metas", "batch_query"):
+    output = RESPONSES["metadata"]
+elif args[:2] == ("api", "GET") and args[2].endswith("/raw_content"):
+    output = RESPONSES["raw"]
+else:
+    raise SystemExit(8)
+sys.stdout.buffer.write(output)
+''',
+            encoding="utf-8",
+        )
+        executable.chmod(0o700)
+        return executable
+
+    def test_lark_production_profile_rejects_before_executable_or_network(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            task, _, key_path, request_path = self._prepare_lark_ingestion(
+                Path(directory).resolve())
+            with mock.patch.object(
+                    lark_cli_transport.shutil, "which",
+                    side_effect=AssertionError("executable lookup forbidden")) as which, \
+                    mock.patch.object(
+                        lark_cli_transport.subprocess, "Popen",
+                        side_effect=AssertionError("subprocess forbidden")) as popen, \
+                    mock.patch.object(
+                        socket, "create_connection",
+                        side_effect=AssertionError("network forbidden")) as network, \
+                    mock.patch.object(kd_cli.sys, "stdout", io.StringIO()) as stdout, \
+                    mock.patch.object(kd_cli.sys, "stderr", io.StringIO()) as stderr:
+                code = kd_cli.main((
+                    "ingest-lark-document", str(task), str(request_path),
+                    "--redaction-key-file", str(key_path),
+                    "--allow-live-read",
+                ))
+
+            self.assertEqual(code, 2)
+            self.assertEqual(stdout.getvalue(), "")
+            self.assertEqual(json.loads(stderr.getvalue())["error"], {
+                "code": "invalid-input", "reason": "lark-live-disabled",
+            })
+            which.assert_not_called()
+            popen.assert_not_called()
+            network.assert_not_called()
+
+    def test_ingest_lark_document_requires_all_arguments_before_read(self) -> None:
+        cases = (
+            ("ingest-lark-document",),
+            ("ingest-lark-document", "task"),
+            ("ingest-lark-document", "task", "request.json"),
+            (
+                "ingest-lark-document", "task", "request.json",
+                "--allow-live-read",
+            ),
+            (
+                "ingest-lark-document", "task", "request.json",
+                "--redaction-key-file", "key",
+            ),
+        )
+        for arguments in cases:
+            with self.subTest(arguments=arguments), mock.patch.object(
+                    source_io, "read_source") as reader, mock.patch.object(
+                    kd_cli.sys, "stdout", io.StringIO()) as stdout, \
+                    mock.patch.object(
+                        kd_cli.sys, "stderr", io.StringIO()) as stderr:
+                code = kd_cli.main(arguments)
+
+            self.assertEqual(code, 2)
+            self.assertEqual(stdout.getvalue(), "")
+            self.assertEqual(json.loads(stderr.getvalue())["error"], {
+                "code": "invalid-input", "reason": "invalid-arguments",
+            })
+            reader.assert_not_called()
+
+    def test_ingest_lark_document_reads_bounded_request_and_delegates(self) -> None:
+        result = ingestion.IngestionResult(
+            status="snapshotted", source_kind="document",
+            source_snapshot_id="sha256:" + "a" * 64,
+            canonical_digest="sha256:" + "b" * 64,
+            source_byte_count=100, source_item_count=1,
+            generation_id="g-synthetic", manifest_digest="c" * 64,
+        )
+        with mock.patch.object(
+                source_io, "read_source", return_value=b"synthetic-request") as read, \
+                mock.patch.object(
+                    lark_runtime, "ingest_lark_document", return_value=result,
+                ) as ingest:
+            payload = kd_cli._run((
+                "ingest-lark-document", "task-root", "private-request.json",
+                "--redaction-key-file", "private-key", "--allow-live-read",
+            ))
+
+        read.assert_called_once_with(
+            "private-request.json",
+            max_bytes=lark_runtime.MAX_LOCAL_REQUEST_BYTES,
+        )
+        ingest.assert_called_once_with(
+            Path("task-root"), b"synthetic-request", "private-key",
+            allow_live_read=True,
+        )
+        self.assertEqual(payload, {"ok": True, "ingestion": asdict(result)})
+
+    def test_local_lark_request_reader_maps_only_source_code(self) -> None:
+        private = "SYNTHETIC_PRIVATE_REQUEST_PATH"
+        with mock.patch.object(
+                source_io, "read_source",
+                side_effect=source_io.SourceIOError("input-changed")) as reader:
+            with self.assertRaises(kd_cli.CliInputError) as caught:
+                kd_cli._read_local_lark_request(private)
+
+        reader.assert_called_once_with(
+            private, max_bytes=lark_runtime.MAX_LOCAL_REQUEST_BYTES)
+        self.assertEqual(caught.exception.reason, "input-changed")
+        self.assertNotIn(private, str(caught.exception))
+        for unsafe in (None, object(), type("PrivatePath", (str,), {})(private)):
+            with self.subTest(kind=type(unsafe).__name__), self.assertRaises(
+                    kd_cli.CliInputError) as invalid:
+                kd_cli._read_local_lark_request(unsafe)
+            self.assertEqual(invalid.exception.reason, "unsafe-source-file")
+            self.assertNotIn(private, str(invalid.exception))
+
+    def test_ingest_lark_document_maps_code_only_failures(self) -> None:
+        private = "SYNTHETIC_PRIVATE_UPSTREAM_DIAGNOSTIC"
+        arguments = (
+            "ingest-lark-document", private + "-task", private + ".json",
+            "--redaction-key-file", private + "-key", "--allow-live-read",
+        )
+        failures = tuple(
+            (lark_runtime.LarkRuntimeError(code), 2, {
+                "code": "invalid-input", "reason": code,
+            })
+            for code in sorted(lark_runtime.LarkRuntimeError.ALLOWED)
+        ) + ((
+            ingestion.IngestionError(private), 3,
+            {"code": "source-ingestion-rejected", "reason": "ingestion-failed"},
+        ),)
+        for failure, expected_code, expected_error in failures:
+            with self.subTest(reason=failure.code), mock.patch.object(
+                    source_io, "read_source", return_value=private.encode()), \
+                    mock.patch.object(
+                        lark_runtime, "ingest_lark_document", side_effect=failure,
+                    ), mock.patch.object(
+                        kd_cli.sys, "stdout", io.StringIO()) as stdout, \
+                    mock.patch.object(
+                        kd_cli.sys, "stderr", io.StringIO()) as stderr:
+                code = kd_cli.main(arguments)
+
+            self.assertEqual(code, expected_code)
+            self.assertEqual(stdout.getvalue(), "")
+            self.assertEqual(json.loads(stderr.getvalue())["error"], expected_error)
+            self.assertNotIn(private, stderr.getvalue())
+
+    def test_ingest_lark_document_maps_unsafe_request_files_to_exit_two(self) -> None:
+        arguments = (
+            "ingest-lark-document", "task", "request.json",
+            "--redaction-key-file", "key", "--allow-live-read",
+        )
+        for reason in (
+            "unsafe-source-file", "source-file-unavailable",
+            "source-file-too-large", "input-changed",
+        ):
+            with self.subTest(reason=reason), mock.patch.object(
+                    source_io, "read_source",
+                    side_effect=source_io.SourceIOError(reason)), \
+                    mock.patch.object(
+                        lark_runtime, "ingest_lark_document") as ingest, \
+                    mock.patch.object(
+                        kd_cli.sys, "stdout", io.StringIO()) as stdout, \
+                    mock.patch.object(
+                        kd_cli.sys, "stderr", io.StringIO()) as stderr:
+                code = kd_cli.main(arguments)
+
+            self.assertEqual(code, 2)
+            self.assertEqual(stdout.getvalue(), "")
+            self.assertEqual(json.loads(stderr.getvalue())["error"], {
+                "code": "invalid-input", "reason": reason,
+            })
+            ingest.assert_not_called()
+
+    def test_lark_synthetic_vertical_ingestion(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            private_root = Path(directory).resolve()
+            task, key, key_path, request_path = self._prepare_lark_ingestion(
+                private_root)
+            executable = self._write_lark_fake(private_root)
+            profile = replace(
+                lark_profile.load_pinned_profile(),
+                status="live-enabled",
+                endpoint_integrity_status="verified",
+                consistency_mode="observational",
+            )
+            environment = {
+                "HOME": str(private_root),
+                "PATH": str(executable.parent),
+                "LANG": "C.UTF-8",
+                "LC_ALL": "C.UTF-8",
+                "TMPDIR": str(private_root),
+            }
+            with mock.patch.dict(os.environ, environment, clear=True), \
+                    mock.patch.object(
+                        lark_runtime, "_require_live_ingestion",
+                        return_value=profile,
+                    ), mock.patch.object(
+                        kd_cli.sys, "stdout", io.StringIO()) as stdout, \
+                    mock.patch.object(
+                        kd_cli.sys, "stderr", io.StringIO()) as stderr:
+                code = kd_cli.main((
+                    "ingest-lark-document", str(task), str(request_path),
+                    "--redaction-key-file", str(key_path),
+                    "--allow-live-read",
+                ))
+
+            self.assertEqual(code, 0, stderr.getvalue())
+            self.assertEqual(stderr.getvalue(), "")
+            payload = json.loads(stdout.getvalue())
+            self.assertTrue(payload["ok"])
+            result = payload["ingestion"]
+            self.assertEqual((result["status"], result["source_kind"]),
+                             ("snapshotted", "document"))
+            snapshot = inspect_task(task)
+            self.assertEqual(snapshot.generation_id, result["generation_id"])
+            generation = task / "generations" / result["generation_id"]
+            authoritative = b"".join(
+                path.read_bytes()
+                for path in generation.rglob("*") if path.is_file()
+            )
+            emitted = stdout.getvalue() + stderr.getvalue()
+            private_markers = (
+                self.LARK_TOKEN, self.LARK_URL, self.LARK_OWNER,
+                self.LARK_TITLE, self.LARK_RAW_TEXT, key.decode("ascii"),
+                str(request_path),
+            )
+            for private in private_markers:
+                self.assertNotIn(private, emitted)
+                self.assertNotIn(private.encode("utf-8"), authoritative)
+            self.assertIn(b"[redacted:credential:hmac-sha256:", authoritative)
 
     def test_event_graph_delegates_to_shared_source_boundary(self) -> None:
         with mock.patch.object(source_io, "read_source", return_value=b"{}") as reader:
