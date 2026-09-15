@@ -9,6 +9,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 README_FILE = ROOT / "README.md"
 DESIGN_FILE = ROOT / "docs" / "specs" / "knowledge-distiller-design.md"
+LARK_RUNTIME_DESIGN_FILE = (
+    ROOT / "docs" / "specs" / "2026-09-11-local-lark-runtime-design.md"
+)
 SKILL_DIR = ROOT / "knowledge-distiller"
 SKILL_FILE = SKILL_DIR / "SKILL.md"
 EVAL_FILE = SKILL_DIR / "evals" / "evals.json"
@@ -627,45 +630,99 @@ class SkillContractTest(unittest.TestCase):
             self.assertNotIn(overclaim.lower(), normalized)
 
     def test_public_guidance_defines_the_synthetic_lark_runtime_boundary(self) -> None:
-        texts = {
-            path.name: path.read_text(encoding="utf-8")
-            for path in (
-                SKILL_FILE,
-                WORKFLOW_FILE,
-                AUTHORIZATION_FILE,
-                ADAPTER_COMPATIBILITY_FILE,
-                README_FILE,
-            )
-        }
-        combined = "\n".join(texts.values())
-        for requirement in (
-            "ingest-lark-document",
-            "--allow-live-read",
-            "synthetic-only",
-            "owner_id",
-            "openId",
-            "observational",
-            "lark-cli 1.0.86",
-            "Wiki URLs are unsupported",
-            "does not authorize a real Lark read",
-        ):
-            self.assertIn(requirement, combined)
-
         command = (
             "python3 knowledge-distiller/scripts/kd.py ingest-lark-document "
             "TASK_PATH REQUEST.json --redaction-key-file KEY --allow-live-read"
         )
-        self.assertIn(command, texts["README.md"])
-        self.assertIn(command, texts["workflow.md"])
+        design_link = "docs/specs/2026-09-11-local-lark-runtime-design.md"
+        files = {
+            "README.md": README_FILE,
+            "SKILL.md": SKILL_FILE,
+            "workflow.md": WORKFLOW_FILE,
+            "authorization.md": AUTHORIZATION_FILE,
+            "adapter-compatibility.md": ADAPTER_COMPATIBILITY_FILE,
+            "status.md": STATUS_FILE,
+            "design.md": LARK_RUNTIME_DESIGN_FILE,
+        }
+        normalized = {
+            name: " ".join(path.read_text(encoding="utf-8").split())
+            for name, path in files.items()
+        }
 
-        status = STATUS_FILE.read_text(encoding="utf-8")
-        self.assertIn("synthetic Lark runtime milestone", status)
-        for remaining_gate in (
+        for name, link in (
+            ("README.md", design_link),
+            ("SKILL.md", "../" + design_link),
+        ):
+            with self.subTest(file=name, contract="single-authority"):
+                self.assertIn(link, normalized[name])
+                self.assertIn("canonical and single authority", normalized[name])
+                self.assertIn("synthetic-only", normalized[name])
+                self.assertIn("does not authorize a real Lark read", normalized[name])
+
+        workflow = normalized["workflow.md"]
+        self.assertIn(command, workflow)
+        self.assertIn("exactly these five fields", workflow)
+        for field in (
+            "schema_version", "transaction_id", "expected_generation_id",
+            "document_selector", "derived_processing_until",
+        ):
+            self.assertIn(f"`{field}`", workflow)
+        for requirement in (
+            "exact 27-character ASCII alphanumeric token",
+            "Wiki URLs are unsupported",
+            "reverify the same `openId`",
+            "before/after `LarkObservation`",
+            "not an atomic or cryptographic snapshot",
+            "lark-live-disabled",
+        ):
+            self.assertIn(requirement, workflow)
+
+        authorization = normalized["authorization.md"]
+        for requirement in (
+            "openId == owner_id",
+            "only in memory",
+            "opaque SHA-256 commitments",
+            "separate from local workspace owner-only permissions",
+        ):
+            self.assertIn(requirement, authorization)
+
+        adapter = normalized["adapter-compatibility.md"]
+        for requirement in (
+            "lark / adapter 1.0.0 / lark-cli 1.0.86 / docx-v1-raw-content-v1",
+            "observational sandwich",
             "endpoint-integrity evidence",
             "accepted consistency mode",
             "one explicitly approved exact-document probe",
+            "Actual CLI response compatibility has not been confirmed",
         ):
-            self.assertIn(remaining_gate, status)
+            self.assertIn(requirement, adapter)
+
+        status = normalized["status.md"]
+        for requirement in (
+            "synthetic Lark runtime milestone",
+            "endpoint-integrity evidence",
+            "accepted consistency mode",
+            "one explicitly approved exact-document probe",
+            "feature branch: `feat/implement_knowledge_distiller`",
+            "work remains local and has not been pushed",
+        ):
+            self.assertIn(requirement, status)
+        self.assertNotRegex(status, r"\bahead\s+\d+\b")
+        for stale_value in ("origin still at", "1304572", "a3be2f5"):
+            self.assertNotIn(stale_value, status)
+
+        design = normalized["design.md"]
+        for requirement in (
+            "Status: implemented (synthetic-only)",
+            "knowledge-distiller.local-lark-ingestion-request/v1",
+            "owner_id", "openId", "observational", "lark-cli 1.0.86",
+            "Wiki URLs are unsupported",
+            "does not authorize a real Lark read",
+            "endpoint-integrity evidence",
+            "accepted consistency mode",
+            "one separately approved exact-document probe",
+        ):
+            self.assertIn(requirement, design)
 
     def test_core_guidance_defines_authority_provenance_and_question_boundaries(self) -> None:
         combined = " ".join((

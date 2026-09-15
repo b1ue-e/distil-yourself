@@ -112,6 +112,9 @@ resolution are not attempted by this runtime.
 
 ## Pinned compatibility profile
 
+The pinned tuple is `lark / adapter 1.0.0 / lark-cli 1.0.86 /
+docx-v1-raw-content-v1`.
+
 | Property | Required value |
 | --- | --- |
 | Product | `lark` |

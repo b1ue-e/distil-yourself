@@ -6,7 +6,7 @@
 
 `knowledge-distiller` 已完成既有 adapter-contract、core dual-source loop、standalone LOCAL CODEX runtime，以及 standalone synthetic Lark runtime milestone 的 Task 1–7 代码和 Task 8 用户契约。新 Lark 命令已贯通 closed request、canonical selector、synthetic control parsers、native-only bounded transport、owner/revision observational sandwich、既有 broker/adapter/redaction/provenance 与 atomic ingestion；但 checked-in profile 固定为 `synthetic-only`，所以生产调用即使带 `--allow-live-read` 也会以 `lark-live-disabled` 在 executable/network 之前停止。该里程碑没有读取真实 Lark 文档，也不代表完整 v1 或 real-read readiness。
 
-Task 8 的独立规格/安全与质量/可读性复审尚待 controller 完成；以下旧章节是历史里程碑记录，其当时测试数字和“后续工作”不得解读为当前能力边界。当前 authoritative boundary 以本节、[workflow](../../knowledge-distiller/references/workflow.md)、[authorization](../../knowledge-distiller/references/authorization.md) 和 [adapter compatibility](../../knowledge-distiller/references/adapter-compatibility.md) 为准。
+Task 8 的独立规格/安全与质量/可读性复审尚待 controller 完成；以下旧章节是历史里程碑记录，其当时测试数字和“后续工作”不得解读为当前能力边界。Standalone Lark 的 canonical and single authority 是 [runtime design](../specs/2026-09-11-local-lark-runtime-design.md)；本节、workflow、authorization 与 adapter compatibility 只记录状态或分主题操作摘要。
 
 Live activation 尚缺且只缺以下三个独立 gate：
 
@@ -26,14 +26,13 @@ PYTHONDONTWRITEBYTECODE=1 python3 -W error::ResourceWarning -m unittest discover
 
 Task 8 文档契约按 TDD 完成：新增测试先因缺少 `ingest-lark-document` 入口事实而 RED，更新后 `test_skill_contract` 为 28/28 GREEN；Lark/runtime 相关 focused suite 为 207/207，严格 full suite 为 517/517。`compileall`、`git diff --check`、仓库无 `__pycache__`、指定真实 Lark URL/token/Open ID 扫描均通过。独立 review 结论由后续 controller 记录，本节不预先声称通过。
 
-## 分支与提交
+## 分支与本地里程碑
 
-- 当前分支：`feat/implement_knowledge_distiller`
-- 最新实现提交：`a3be2f5 fix: refresh local authorization before source read`
+- feature branch: `feat/implement_knowledge_distiller`
+- work remains local and has not been pushed；本文不记录会随下一提交失效的提交数量或远端 SHA
 - core dual-source loop Task 1–10 已完成规格与质量双审闭环
-- standalone LOCAL CODEX runtime 本地实现 range 仍未 push；origin 仍在 `1304572`
-- 当前分支在本 completion commit 前相对 `origin/feat/implement_knowledge_distiller` ahead 19；本记录提交后会变为 ahead 20
-- 本 post-plan implementation range 未新增 push、merge、安装、导出或发布
+- standalone LOCAL CODEX runtime 已完成；standalone Lark runtime 已完成 synthetic-only 实现
+- 本地 Lark milestone 未新增 push、merge、安装、导出或发布
 
 已完成的本地提交：
 
@@ -233,7 +232,7 @@ python3 knowledge-distiller/scripts/kd.py ingest-codex-session \
 
 显式精简结论：没有可删除的 production/test/doc redundancy。dedicated local request reader 是有命名职责的边界，尽管当前大小限制等于通用 request limit；authorization/broker/source I/O 的独立 trust-boundary revalidation 需要保留，不应合并。
 
-验收只使用 checked-in synthetic fixture 复制到临时文件；本 milestone 未读取任何真实 Codex session，也未调用 Lark。该历史时点的剩余工作曾包括 Lark standalone runtime；它后来已完成 synthetic-only 实现，但 live activation 仍受本页顶部三个 gate 阻断。automatic extraction/mapping、evaluation、export、installation、publication 仍未完成。本 post-plan milestone range 未发生新的 push、merge、install、export、publish、real session read 或更大范围环境变更；此前按请求做过 progress push，但当前 origin 仍在 `1304572`，本地实现 commits 仍未 push。
+验收只使用 checked-in synthetic fixture 复制到临时文件；本 milestone 未读取任何真实 Codex session，也未调用 Lark。该历史时点的剩余工作曾包括 Lark standalone runtime；它后来已完成 synthetic-only 实现，但 live activation 仍受本页顶部三个 gate 阻断。automatic extraction/mapping、evaluation、export、installation、publication 仍未完成。该 Codex milestone 当时未新增 push、merge、install、export、publish、real session read 或更大范围环境变更。
 
 ### 产品里程碑
 
@@ -251,5 +250,5 @@ python3 knowledge-distiller/scripts/kd.py ingest-codex-session \
 - 真实 Lark 正文未显示、未写入仓库、未保存在测试 fixture；仓库内只有合成内容与 bounded schema 元数据。
 - 已按用户明确授权对本地 Codex active/archived session roots 做只读聚合兼容性 probe；没有输出或保留正文、路径、session ID，未读取 credentials/config/cache，也未修改原生文件。
 - 除上述单一已授权 Lark probe 与 Codex 聚合兼容性 probe 外，只使用官方资料、CLI `--help`/`--version` 和 synthetic fixtures。
-- 本 post-plan milestone range 未新增 push、merge、skill 安装、导出、发布或外部写入；此前按请求做过 progress push，当前 origin 仍在 `1304572`，本地实现 commits 仍未 push。
+- 本地 Lark milestone 未新增 push、merge、skill 安装、导出、发布或外部写入。
 - 未进行更大范围的环境变更；观察到的 CLI 版本/skill notice 未触发升级或配置修改。

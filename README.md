@@ -94,7 +94,9 @@ The standalone Lark entry point is present for the verified synthetic milestone:
 python3 knowledge-distiller/scripts/kd.py ingest-lark-document TASK_PATH REQUEST.json --redaction-key-file KEY --allow-live-read
 ```
 
-Its checked-in profile is `synthetic-only`, so a production invocation always returns `lark-live-disabled` before resolving `lark-cli 1.0.86` or making a network request. `--allow-live-read` expresses explicit intent but does not authorize a real Lark read. The command accepts only one exact owner-controlled Docx selector; Wiki URLs are unsupported. The closed request, `openId == owner_id` proof, observational consistency limit, privacy behavior, and remaining live gates are specified in [the workflow](knowledge-distiller/references/workflow.md), [authorization reference](knowledge-distiller/references/authorization.md), and [adapter compatibility gate](knowledge-distiller/references/adapter-compatibility.md).
+Its checked-in profile is `synthetic-only`, so a production invocation always returns `lark-live-disabled` before resolving `lark-cli 1.0.86` or making a network request. `--allow-live-read` expresses explicit intent but does not authorize a real Lark read. The command accepts only one exact owner-controlled Docx selector; Wiki URLs are unsupported.
+
+The [standalone Lark runtime design](docs/specs/2026-09-11-local-lark-runtime-design.md) is the canonical and single authority for this boundary. The [workflow](knowledge-distiller/references/workflow.md), [authorization reference](knowledge-distiller/references/authorization.md), and [adapter compatibility gate](knowledge-distiller/references/adapter-compatibility.md) are topic-specific operating references, not independent definitions of readiness.
 
 The following lines document the embedded API boundary syntax only. They are not directly executable for real ingestion without a production host runtime:
 
