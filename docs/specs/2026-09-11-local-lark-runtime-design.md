@@ -248,6 +248,12 @@ runtime. Shared service accounts, multi-user daemons, untrusted same-UID
 processes, hostile local administrators, compromised Feishu responses, and
 cross-application Open-ID correlation are outside the threat model.
 
+The task workspace and redaction key are owner-only. The caller explicitly
+selects the request path. `source_io` reads that request through a bounded,
+no-follow, regular-file boundary, but the current request reader does not verify
+its owner UID. The request-file safety boundary must therefore not be described
+as same-UID ownership verification.
+
 ## Observationally stable read protocol
 
 The raw-content endpoint has no revision selector or response revision. The
@@ -402,7 +408,7 @@ identity digests defined above.
 | `native_adapters` | Exact 1.0.86 success envelope and schema digest; no adapter auto-detection |
 | `ingestion.ingest_source` | Writer lease, generation/phase/source recheck before acquisition, redaction before persistence, atomic generation commit |
 | `TaskCoordinator` | Previous generation remains authoritative after any pre-commit failure |
-| `source_io` | Bounded, no-follow, same-effective-user read of the private request and `0600` redaction key |
+| `source_io` | Bounded, no-follow, regular-file request read; separate same-effective-user, exact-`0600` redaction-key read |
 
 ## Error handling
 

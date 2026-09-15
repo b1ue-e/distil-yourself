@@ -643,7 +643,7 @@ class SkillContractTest(unittest.TestCase):
             "filesystem selector is persisted only as a domain-separated commitment",
             "opaque `project_id` is required for private provenance binding but is never printed",
             "synthetic acceptance does not authorize any real session read",
-            "discovery, sibling reads, arbitrary versions, lark standalone access, automatic extraction, evaluation, export, installation, and publication are unavailable",
+            "discovery, sibling reads, arbitrary versions, production lark standalone access, automatic extraction, evaluation, export, installation, and publication are unavailable",
             "key generation and lifecycle are outside this milestone",
         ):
             self.assertIn(requirement, normalized)
@@ -689,6 +689,31 @@ class SkillContractTest(unittest.TestCase):
             "lark-live-disabled",
         ):
             self.assertIn(requirement, workflow)
+        exact_runtime_order = (
+            "decode the request and selector → preflight the task slot → derive "
+            "the effective UID and read the redaction key and runtime time → "
+            "require the live profile → verify the CLI version, user identity, "
+            "and scopes → observe token, revision, and owner before the read → "
+            "materialize authorization and validate the derived-processing "
+            "deadline → enter ingestion, reverify the same user, acquire raw "
+            "content, and observe token, revision, and owner after the read"
+        )
+        self.assertIn(exact_runtime_order, workflow)
+        self.assertIn(
+            "An invalid derived-processing deadline is guaranteed to fail before "
+            "raw-content acquisition, but not necessarily before control-plane "
+            "authentication or metadata calls.",
+            workflow,
+        )
+        self.assertNotIn(
+            "After task-slot, key, deadline, and live-profile gates",
+            workflow,
+        )
+        self.assertIn("production Lark standalone access", workflow)
+        self.assertNotIn(
+            "arbitrary versions, Lark standalone access, automatic extraction",
+            workflow,
+        )
 
     def test_lark_guidance_routes_authority_profile_and_live_gates(self) -> None:
         design_link = "docs/specs/2026-09-11-local-lark-runtime-design.md"
@@ -713,6 +738,26 @@ class SkillContractTest(unittest.TestCase):
             "separate from local workspace owner-only permissions",
         ):
             self.assertIn(requirement, authorization)
+        request_boundary = (
+            "The task workspace and redaction key are owner-only. The caller "
+            "explicitly selects the request path. `source_io` reads that request "
+            "through a bounded, no-follow, regular-file boundary, but the current "
+            "request reader does not verify its owner UID."
+        )
+        self.assertIn(request_boundary, authorization)
+
+        design = self.normalized_text(LARK_RUNTIME_DESIGN_FILE)
+        self.assertIn(request_boundary, design)
+        for text in (authorization, design):
+            self.assertNotIn(
+                "the task workspace, private request, and redaction key to be "
+                "controlled by the effective OS user",
+                text,
+            )
+            self.assertNotIn(
+                "same-effective-user read of the private request",
+                text,
+            )
 
         adapter = self.normalized_text(ADAPTER_COMPATIBILITY_FILE)
         self.assertIn(
