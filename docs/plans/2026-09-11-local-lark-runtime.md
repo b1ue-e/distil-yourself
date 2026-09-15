@@ -865,7 +865,7 @@ Expected: FAIL because the public skill still says the production Lark runtime i
 
 Document the exact command, request schema, owner-only authority, selector restrictions, observational sandwich, synthetic-only profile, error behavior, and prohibition on real reads. Keep automatic discovery, Wiki resolution, shared-document authority, live probe, profile activation, evaluation, export, installation, publication, and purge unavailable. Mark the design `implemented (synthetic-only)` only after code gates pass, mark Tasks 1–8 in this plan complete as they land, and add exact test/review results to the status file.
 
-- [ ] **Step 4: Run final verification and independent reviews**
+- [x] **Step 4: Run final verification and independent reviews**
 
 Run:
 
@@ -887,7 +887,7 @@ Expected: focused and full suites PASS, compilation succeeds, diff check is empt
 
 Request two independent reviews against the design: specification/security first, then quality/readability. Both must explicitly inspect for deletable helpers, duplicated validation, redundant fixtures/tests, speculative abstractions, dead compatibility branches, and documentation repetition. Fix every Critical/Important finding with a focused regression test and rerun both review gates until `SPEC PASS` and `READY`.
 
-- [ ] **Step 5: Commit the verified milestone record**
+- [x] **Step 5: Commit the verified milestone record**
 
 ```bash
 git add knowledge-distiller/SKILL.md knowledge-distiller/references \
