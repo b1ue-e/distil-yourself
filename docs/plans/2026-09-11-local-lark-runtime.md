@@ -616,7 +616,7 @@ git commit -m "feat: bind standalone Lark broker evidence"
 - Modify: `knowledge-distiller/scripts/knowledge_distiller/lark_cli_transport.py`
 - Modify: `tests/test_lark_runtime.py`
 
-- [ ] **Step 1: Write failing authorization and orchestration tests**
+- [x] **Step 1: Write failing authorization and orchestration tests**
 
 Require opaque derivation and exact operation order:
 
@@ -638,7 +638,7 @@ def test_owner_only_materialization_and_stable_ingestion(self):
 
 Before-acquisition tests must reject stale generation, wrong phase, duplicate Lark source, missing consent, synthetic-only production profile, incompatible CLI, missing scopes, owner mismatch, and invalid deadline without calling raw content. Acquisition tests must reject changed Open ID, owner, token, type, revision, malformed post-observation, transport evidence unavailable, raw overflow, adapter mismatch, redaction failure, and commit crash without changing the authoritative generation.
 
-- [ ] **Step 2: Run runtime tests red**
+- [x] **Step 2: Run runtime tests red**
 
 Run:
 
@@ -650,7 +650,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest \
 
 Expected: FAIL because no Lark orchestration exists.
 
-- [ ] **Step 3: Implement short-lived authorization and trusted runner receipt**
+- [x] **Step 3: Implement short-lived authorization and trusted runner receipt**
 
 Use the shared time/UID/key helpers and validate `derived_processing_until` with the same five-minute read window and 90-day maximum as Codex. Derive:
 
@@ -692,7 +692,7 @@ materialized = materialize_local_lark_request(
 
 The acquisition callback reverifies the same Open ID, executes only the broker-provided raw argv through the transport, observes again, compares one typed `LarkObservation`, and returns the existing `LarkResponse` with opaque principal/account/owner, before/after revision, selector commitment, pinned tuple, and no-fallback/endpoint-integrity receipt. Use a zero-variable ambient credential resolver returning the exact expected `CredentialBinding`. Delegate to `ingestion.ingest_source` with Lark acquisition and a rejecting Codex branch.
 
-- [ ] **Step 4: Run Lark runtime and shared ingestion tests green**
+- [x] **Step 4: Run Lark runtime and shared ingestion tests green**
 
 Run:
 
@@ -704,7 +704,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 -W error::ResourceWarning -m unittest \
 
 Expected: PASS with exact flow ordering, no real process/network use outside the fake executable, no private value in errors, and no partial commit.
 
-- [ ] **Step 5: Commit the Lark runtime**
+- [x] **Step 5: Commit the Lark runtime**
 
 ```bash
 git add knowledge-distiller/scripts/knowledge_distiller/lark_runtime.py \
