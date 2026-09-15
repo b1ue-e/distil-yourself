@@ -195,9 +195,13 @@ def _legacy_lark_document_token(selector):
     return selector.rsplit("/", 1)[-1]
 
 
+def _is_lark_selector_commitment(selector):
+    return (type(selector) is str and re.fullmatch(
+        r"sha256:[0-9a-f]{64}", selector) is not None)
+
+
 def _lark_selector_binding(selector, authorized_selector):
-    committed = (type(authorized_selector) is str and re.fullmatch(
-        r"sha256:[0-9a-f]{64}", authorized_selector) is not None)
+    committed = _is_lark_selector_commitment(authorized_selector)
     if committed:
         try:
             parsed = lark_selector.parse_document_selector(selector)
@@ -229,7 +233,9 @@ def _lark_request(request, context):
 
 
 def _credentials(resolver, required_variables, context) -> dict:
-    if type(required_variables) is not tuple or not 0 <= len(required_variables) <= 8:
+    minimum_variables = 0 if _is_lark_selector_commitment(context.selector) else 1
+    if (type(required_variables) is not tuple
+            or not minimum_variables <= len(required_variables) <= 8):
         raise BrokerError("invalid-credentials")
     for name in required_variables:
         if (type(name) is not str or len(name) > 128

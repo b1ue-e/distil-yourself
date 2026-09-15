@@ -143,6 +143,26 @@ class BrokerTest(unittest.TestCase):
         self.resolver.assert_not_called()
         self.runner.assert_not_called()
 
+    def test_legacy_lark_requires_explicit_secret_before_resolver_or_runner(self):
+        cases = (
+            (self.context, self.request),
+            (
+                replace(self.context, selector=LEGACY_TOKEN),
+                brokers.LarkRequest(LEGACY_TOKEN, "42"),
+            ),
+        )
+        for context, request in cases:
+            with self.subTest(selector_kind=(
+                    "url" if "/" in context.selector else "token")):
+                self.reject(
+                    lambda context=context, request=request: self.fetch(
+                        request=request, context=context,
+                        records=self.records(context),
+                        required_auth_variables=()),
+                    "invalid-credentials")
+        self.resolver.assert_not_called()
+        self.runner.assert_not_called()
+
     def test_lark_selector_commitment_and_ambient_user_are_bound(self):
         committed = lark_selector.parse_document_selector(TOKEN)
         context = replace(self.context, selector=committed.commitment)
